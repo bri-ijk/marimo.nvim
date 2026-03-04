@@ -7,9 +7,12 @@
 ---     -- optional overrides; see config.lua for all options
 ---     port = 2718,
 ---     follow_cursor = true,
+---     open_browser = false,
 ---   })
 ---
---- Then open a marimo notebook .py file and run :MarimoAttach.
+--- Open a marimo notebook .py file, then either:
+---   :MarimoStart   — launch marimo edit for the current file and auto-attach
+---   :MarimoAttach  — attach to an already-running marimo server
 
 local M         = {}
 
@@ -86,6 +89,48 @@ function M.attach()
         string.format('[marimo] connecting to %s:%d …', conn.host, conn.port),
         vim.log.levels.INFO
     )
+end
+
+--- Start a marimo server for the current buffer's file and then auto-attach.
+--- If a server is already running, skips launch and attaches directly.
+function M.start()
+    local bufnr = vim.api.nvim_get_current_buf()
+    local path  = vim.api.nvim_buf_get_name(bufnr)
+
+    if path == '' then
+        vim.notify('[marimo] buffer has no file path', vim.log.levels.ERROR)
+        return
+    end
+
+    -- If a server is already reachable, just attach to it.
+    if server.is_running() then
+        vim.notify('[marimo] server already running — attaching …', vim.log.levels.INFO)
+        M.attach()
+        return
+    end
+
+    vim.notify('[marimo] starting marimo server …', vim.log.levels.INFO)
+
+    server.start(path, { open_browser = config.opts.open_browser }, function(conn, err)
+        vim.schedule(function()
+            if err then
+                vim.notify('[marimo] ' .. err, vim.log.levels.ERROR)
+                return
+            end
+            -- Server is up; run a normal attach now that the port is known.
+            M.attach()
+        end)
+    end)
+end
+
+--- Stop the marimo server started by :MarimoStart and detach the current buffer.
+function M.stop()
+    local bufnr = vim.api.nvim_get_current_buf()
+    if _sessions[bufnr] then
+        M.detach(bufnr)
+    end
+    server.stop()
+    vim.notify('[marimo] server stopped', vim.log.levels.INFO)
 end
 
 --- Detach the current (or specified) buffer from its marimo session.

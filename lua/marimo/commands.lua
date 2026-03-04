@@ -2,6 +2,8 @@
 --- Registers user-facing Neovim commands for the marimo plugin.
 ---
 --- Commands:
+---   :MarimoStart           Launch marimo edit for the current file and auto-attach
+---   :MarimoStop            Stop the plugin-managed marimo server and detach
 ---   :MarimoAttach          Connect current buffer to a running marimo server
 ---   :MarimoDetach          Disconnect current buffer
 ---   :MarimoToggleFollow    Toggle automatic cursor-follow (follow_cursor option)
@@ -11,6 +13,14 @@ local M = {}
 
 local function create_commands()
     local marimo = require 'marimo'
+
+    vim.api.nvim_create_user_command('MarimoStart', function()
+        marimo.start()
+    end, { desc = 'Start marimo edit for the current file and auto-attach' })
+
+    vim.api.nvim_create_user_command('MarimoStop', function()
+        marimo.stop()
+    end, { desc = 'Stop the plugin-managed marimo server and detach' })
 
     vim.api.nvim_create_user_command('MarimoAttach', function()
         marimo.attach()

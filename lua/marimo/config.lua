@@ -13,6 +13,9 @@ M.opts = {
     websocat_bin = nil,
     -- Marimo server token. Usually not needed — auto-obtained from the server.
     server_token = nil,
+    -- Whether to open the browser automatically when starting the marimo server.
+    -- Set to false to suppress the browser tab (useful when working in the terminal).
+    open_browser = true,
 }
 
 --- Merge user opts into defaults.
