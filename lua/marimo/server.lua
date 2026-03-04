@@ -8,10 +8,6 @@
 ---      extract the --port argument (Linux).  Falls back to `ss`/`lsof` on
 ---      macOS / systems without /proc.
 ---   3. Try the default marimo port (2718).
----
---- Once a port is found, GET /api/status is called to confirm the server is
---- alive and to retrieve the skew_protection_token required for subsequent
---- HTTP requests.
 
 local M = {}
 
@@ -23,54 +19,45 @@ local DEFAULT_PORT = 2718
 --- @type uv_process_t|nil
 local _proc = nil
 
---- Attempt to read the marimo server token from /api/status.
---- Returns the token string, or nil on failure.
+--- Generate a random token string suitable for use as --token-password.
+--- @return string
+local function generate_token()
+    local seed = tostring(os.time()) .. tostring(math.random(1e9))
+    return vim.fn.sha256(seed):sub(1, 32)
+end
+
+--- Attempt to contact the marimo server to confirm it is alive.
+--- Uses GET /api/version — unauthenticated, always 200 when the server is up.
 --- @param host string
 --- @param port integer
---- @return string|nil token
+--- @return boolean ok
 --- @return string|nil err
-local function fetch_token(host, port)
-    local url = string.format('http://%s:%d/api/status', host, port)
-    -- vim.system is available in nvim 0.10+; fall back to io.popen for older.
-    local ok, result
+local function ping(host, port)
+    local url = string.format('http://%s:%d/api/version', host, port)
+    local ok
     if vim.system then
         local out = vim.system({ 'curl', '-sf', '--max-time', '2', url }):wait()
         ok = out.code == 0
-        result = out.stdout
     else
         local handle = io.popen(string.format("curl -sf --max-time 2 '%s'", url))
         if handle then
-            result = handle:read('*a')
+            local result = handle:read('*a')
             handle:close()
             ok = result ~= nil and result ~= ''
         end
     end
 
-    if not ok or not result or result == '' then
-        return nil, string.format('marimo server not reachable at %s:%d', host, port)
+    if not ok then
+        return false, string.format('marimo server not reachable at %s:%d', host, port)
     end
 
-    local decoded = vim.json.decode(result)
-    if not decoded then
-        return nil, 'could not parse /api/status response'
-    end
-
-    -- The token lives at .skew_protection_token (present since marimo ~0.6)
-    local token = decoded.skew_protection_token
-    if not token or token == '' then
-        -- Older builds may not have the field; return empty string so callers
-        -- can still proceed — requests just won't carry the header.
-        token = ''
-    end
-
-    return token, nil
+    return true, nil
 end
 
 --- Scan /proc for a running `marimo edit` process and return its --port value.
 --- Returns nil if not found or /proc is unavailable.
 --- @return integer|nil
 local function detect_port_from_proc()
-    -- Only available on Linux.
     if vim.fn.isdirectory('/proc') == 0 then
         return nil
     end
@@ -81,10 +68,8 @@ local function detect_port_from_proc()
         if f then
             local raw = f:read('*a')
             f:close()
-            -- cmdline is NUL-delimited; replace NULs with spaces for matching.
             local cmdline = raw:gsub('%z', ' ')
             if cmdline:match('marimo') and cmdline:match('edit') then
-                -- Look for --port <N> or --port=<N>
                 local port = cmdline:match('%-%-port[= ](%d+)')
                 if port then
                     return tonumber(port)
@@ -97,7 +82,6 @@ local function detect_port_from_proc()
 end
 
 --- Find the port of a running marimo server.
---- Prefers config.opts.port, then /proc detection, then the default port.
 --- @return integer port
 local function resolve_port()
     if config.opts.port then
@@ -112,42 +96,35 @@ local function resolve_port()
     return DEFAULT_PORT
 end
 
---- Connect to the marimo server and return a connection descriptor.
----
---- @return {host: string, port: integer, token: string}|nil  connection
+--- Connect to an already-running marimo server and return a connection descriptor.
+--- @return {host: string, port: integer, token: string}|nil
 --- @return string|nil  error message
 function M.connect()
     local host = config.opts.host or '127.0.0.1'
     local port = resolve_port()
 
-    -- If a token was given explicitly in config, trust it without probing.
-    if config.opts.server_token then
-        return { host = host, port = port, token = config.opts.server_token }, nil
-    end
-
-    local token, err = fetch_token(host, port)
-    if not token then
+    local ok, err = ping(host, port)
+    if not ok then
         return nil, err
     end
 
-    return { host = host, port = port, token = token }, nil
+    return { host = host, port = port, token = config.opts.server_token or '' }, nil
 end
 
 --- Return true if a marimo server is already reachable on the resolved port.
 --- @return boolean
 function M.is_running()
     local host = config.opts.host or '127.0.0.1'
-    local port = resolve_port()
-    local token, _ = fetch_token(host, port)
-    return token ~= nil
+    local port = config.opts.port or DEFAULT_PORT
+    local ok, _ = ping(host, port)
+    return ok
 end
 
 --- Start a marimo server for the given file and call back with the connection.
 ---
---- Spawns `marimo edit [--no-browser] <file_path>` as a background process,
---- then polls /api/status every 500 ms for up to 10 seconds.  On success the
---- callback receives `(conn, nil)`; on timeout or spawn failure it receives
---- `(nil, err_string)`.
+--- Generates a token, passes it to marimo via --token-password so auth is
+--- known up front — no stdout parsing required.  Polls /api/version every
+--- 500 ms for up to 20 s, then calls back with the connection or an error.
 ---
 --- @param file_path string   Absolute path to the notebook .py file.
 --- @param opts      table    { open_browser: boolean }
@@ -164,22 +141,29 @@ function M.start(file_path, opts, callback)
         return
     end
 
-    local args = { 'edit' }
+    local host  = config.opts.host or '127.0.0.1'
+    local port  = config.opts.port or DEFAULT_PORT
+    local token = generate_token()
+
+    local args = {
+        'edit',
+        '--port',           tostring(port),
+        '--token-password', token,
+        '--watch',  -- reload kernel when the file changes on disk (BufWritePost)
+    }
     if not opts.open_browser then
-        table.insert(args, '--no-browser')
+        table.insert(args, '--headless')
     end
     table.insert(args, file_path)
 
     local handle
     handle = vim.uv.spawn(marimo_bin, { args = args, detached = false }, function(code, _signal)
-        -- Process exited.
         if handle and not handle:is_closing() then
             handle:close()
         end
         if _proc == handle then
             _proc = nil
         end
-        -- Only report unexpected exits (code ~= 0) after the server was already up.
         if code ~= 0 then
             vim.schedule(function()
                 vim.notify('[marimo] server process exited with code ' .. code, vim.log.levels.WARN)
@@ -194,29 +178,26 @@ function M.start(file_path, opts, callback)
 
     _proc = handle
 
-    -- Kill the managed process when Neovim exits.
     vim.api.nvim_create_autocmd('VimLeavePre', {
         once = true,
         callback = function() M.stop() end,
     })
 
-    -- Poll until the server is reachable, then call back.
-    local host  = config.opts.host or '127.0.0.1'
-    local port  = resolve_port()
-    local tries = 0
-    local max_tries = 20  -- 20 × 500 ms = 10 s
+    local tries     = 0
+    local max_tries = 40  -- 40 × 500 ms = 20 s
 
     local function poll()
         tries = tries + 1
-        local token, _ = fetch_token(host, port)
-        if token then
+        local ok, _ = ping(host, port)
+        if ok then
             callback({ host = host, port = port, token = token }, nil)
             return
         end
         if tries >= max_tries then
             M.stop()
             callback(nil, string.format(
-                'marimo server did not become ready after %d s', max_tries * 0.5))
+                'marimo server did not become ready after %d s on port %d',
+                max_tries * 0.5, port))
             return
         end
         vim.defer_fn(poll, 500)

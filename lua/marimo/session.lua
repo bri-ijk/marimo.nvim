@@ -28,14 +28,18 @@ local function uri_encode(s)
     end)
 end
 
---- Generate a random UUID v4 string.
+--- Generate a marimo-compatible session_id.
+--- The frontend validates against /^s_[\da-z]{6}$/ and only reuses the id
+--- from the URL if it passes — so we must match that exact format.
 --- @return string
-local function uuid4()
-    local template = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'
-    return template:gsub('[xy]', function(c)
-        local v = (c == 'x') and math.random(0, 0xf) or math.random(8, 0xb)
-        return string.format('%x', v)
-    end)
+local function new_session_id()
+    local chars = '0123456789abcdefghijklmnopqrstuvwxyz'
+    local result = 's_'
+    for _ = 1, 6 do
+        local i = math.random(1, #chars)
+        result = result .. chars:sub(i, i)
+    end
+    return result
 end
 
 --- Find websocat binary: config override → PATH.
@@ -52,7 +56,6 @@ local function find_websocat()
     return nil
 end
 
--- Session constructor
 
 --- Create a new Session for the given connection descriptor and notebook path.
 ---
@@ -63,7 +66,7 @@ function M.new(conn, notebook_path)
     local self = setmetatable({}, M)
     self.conn = conn
     self.notebook_path = notebook_path
-    self.session_id = uuid4()
+    self.session_id = new_session_id()
     self.cell_ids = {} -- ordered list: cell_ids[i] = marimo CellId (1-based)
     self.ready = false -- true once kernel-ready has been parsed
     self.closed = false
@@ -75,6 +78,7 @@ function M.new(conn, notebook_path)
 
     -- Callbacks registered by events.lua
     self._on_ready = nil -- called when cell_ids is populated / refreshed
+    self._retry_count = 0 -- kiosk reconnect attempts since last successful connect
 
     return self
 end
@@ -98,6 +102,7 @@ function M:_handle_message(msg)
         local data = msg.data or {}
         self.cell_ids = data.cell_ids or {}
         self.ready = true
+        self._retry_count = 0  -- reset on successful connection
         vim.defer_fn(function()
             if self._on_ready then
                 self._on_ready(self.cell_ids)
@@ -142,14 +147,15 @@ function M:connect(on_ready)
             .. 'or set vim.g.marimo_websocat_bin / require("marimo").setup({ websocat_bin = "..." }).'
     end
 
-    self._on_ready    = on_ready
+    self._on_ready = on_ready
 
-    local ws_url      = string.format(
-        'ws://%s:%d/ws?session_id=%s&file=%s',
+    local ws_url = string.format(
+        'ws://%s:%d/ws?session_id=%s&file=%s&access_token=%s&kiosk=true',
         self.conn.host,
         self.conn.port,
         self.session_id,
-        uri_encode(self.notebook_path)
+        uri_encode(self.notebook_path),
+        self.conn.token
     )
 
     local stdin_pipe  = assert(vim.uv.new_pipe())
@@ -178,23 +184,50 @@ function M:connect(on_ready)
 
     -- Read stdout → parse messages
     stdout_pipe:read_start(function(err, data)
-        if data then
+        if err then
+            vim.defer_fn(function()
+                if not self.closed then
+                    vim.notify('[marimo] WebSocket read error: ' .. tostring(err), vim.log.levels.WARN)
+                end
+            end, 0)
+        elseif data then
             vim.defer_fn(function()
                 self:_on_data(data)
             end, 0)
-        elseif not data then
-            -- EOF: websocat exited (server closed connection or websocat crashed)
+        else
+            -- EOF: server closed the connection (MARIMO_NO_SESSION on first
+            -- connect, or kernel reload after file save). Retry with backoff.
             vim.defer_fn(function()
                 if not self.closed then
-                    self.ready = false
-                    vim.notify('[marimo] WebSocket connection lost', vim.log.levels.WARN)
+                    self._retry_count = self._retry_count + 1
+                    if self._retry_count > 10 then
+                        vim.notify(
+                            '[marimo] kiosk WS: gave up reconnecting after 10 attempts',
+                            vim.log.levels.WARN
+                        )
+                        return
+                    end
+                    self:_teardown()
+                    self._read_buffer = ''
+                    vim.defer_fn(function()
+                        if not self.closed then
+                            self:connect(self._on_ready)
+                        end
+                    end, 500)
                 end
             end, 0)
         end
     end)
 
-    -- Drain stderr so the pipe doesn't block.
-    stderr_pipe:read_start(function(_, _) end)
+    -- Log websocat stderr. marimo sends the close reason here (e.g.
+    -- MARIMO_NO_SESSION) which helps diagnose connection failures.
+    stderr_pipe:read_start(function(_, data)
+        if data and data:match('%S') then
+            vim.schedule(function()
+                vim.notify('[marimo] websocat: ' .. vim.trim(data), vim.log.levels.WARN)
+            end)
+        end
+    end)
 
     return nil -- success
 end
@@ -248,11 +281,10 @@ function M:focus_cell(cell_index)
     --   'curl', '-sf', '-X', 'POST',
     --   '-H', 'Content-Type: application/json',
     --   '-H', 'Marimo-Session-Id: ' .. self.session_id,
-    --   '-H', 'Marimo-Server-Token: ' .. self.conn.token,
     --   '-d', vim.json.encode({ cell_id = cell_id }),
     --   string.format(
-    --     'http://%s:%d/api/kernel/focus_cell',
-    --     self.conn.host, self.conn.port
+    --     'http://%s:%d/api/kernel/focus_cell?access_token=%s',
+    --     self.conn.host, self.conn.port, self.conn.token
     --   ),
     -- }, { text = true })
     -- END STUB
@@ -267,12 +299,14 @@ end
 
 --- Request a fresh kernel-ready by closing and reopening the WebSocket.
 --- Call this after `:w` when cells may have been reordered in the file.
+--- The session_id is preserved so marimo recognises the reconnect as the
+--- same client rather than creating a new kernel session.
 function M:refresh()
     if self.closed then return end
     local on_ready = self._on_ready
     self:_teardown()
     self._read_buffer = ''
-    self.session_id = uuid4()
+    -- Do NOT rotate session_id — marimo binds the kernel to the original id.
     self:connect(on_ready)
 end
 

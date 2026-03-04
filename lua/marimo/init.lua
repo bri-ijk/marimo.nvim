@@ -37,33 +37,18 @@ end
 
 -- Core API
 
---- Attach the current buffer to a running marimo server.
---- Idempotent: calling again on an already-attached buffer re-connects.
-function M.attach()
-    local bufnr = vim.api.nvim_get_current_buf()
-    local path  = vim.api.nvim_buf_get_name(bufnr)
-
-    if path == '' then
-        vim.notify('[marimo] buffer has no file path', vim.log.levels.ERROR)
-        return
-    end
-
-    -- Detach silently first if already attached (re-attach / reconnect).
+--- Internal: attach a buffer to marimo using a known connection descriptor.
+--- @param bufnr integer
+--- @param path  string
+--- @param conn  table  { host, port, token }
+local function attach_with_conn(bufnr, path, conn)
+    -- Detach silently first if already attached.
     if _sessions[bufnr] then
         _sessions[bufnr]:close()
         events.detach(bufnr)
         _sessions[bufnr] = nil
     end
 
-    -- Locate the running marimo server.
-    local conn, err = server.connect()
-    if not conn then
-        vim.notify('[marimo] ' .. (err or 'could not connect to marimo server'),
-            vim.log.levels.ERROR)
-        return
-    end
-
-    -- Create session and start WebSocket connection.
     local session = Session.new(conn, path)
     local ws_err = session:connect(function(cell_ids)
         vim.notify(
@@ -80,7 +65,6 @@ function M.attach()
 
     _sessions[bufnr] = session
 
-    -- Wire autocmds; on_delete keeps _sessions in sync when the buffer closes.
     events.attach(bufnr, session, function()
         _sessions[bufnr] = nil
     end)
@@ -89,6 +73,29 @@ function M.attach()
         string.format('[marimo] connecting to %s:%d …', conn.host, conn.port),
         vim.log.levels.INFO
     )
+
+    return session
+end
+
+--- Attach the current buffer to a running marimo server.
+--- Idempotent: calling again on an already-attached buffer re-connects.
+function M.attach()
+    local bufnr = vim.api.nvim_get_current_buf()
+    local path  = vim.api.nvim_buf_get_name(bufnr)
+
+    if path == '' then
+        vim.notify('[marimo] buffer has no file path', vim.log.levels.ERROR)
+        return
+    end
+
+    local conn, err = server.connect()
+    if not conn then
+        vim.notify('[marimo] ' .. (err or 'could not connect to marimo server'),
+            vim.log.levels.ERROR)
+        return
+    end
+
+    attach_with_conn(bufnr, path, conn)
 end
 
 --- Start a marimo server for the current buffer's file and then auto-attach.
@@ -117,8 +124,13 @@ function M.start()
                 vim.notify('[marimo] ' .. err, vim.log.levels.ERROR)
                 return
             end
-            -- Server is up; run a normal attach now that the port is known.
-            M.attach()
+            local session = attach_with_conn(bufnr, path, conn)
+            local sid = session and session.session_id or ''
+            vim.notify(
+                string.format('[marimo] open in browser: http://%s:%d?access_token=%s&session_id=%s',
+                    conn.host, conn.port, conn.token, sid),
+                vim.log.levels.INFO
+            )
         end)
     end)
 end
