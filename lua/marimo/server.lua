@@ -19,11 +19,55 @@ local DEFAULT_PORT = 2718
 --- @type uv_process_t|nil
 local _proc = nil
 
+--- Percent-encode a string for safe use in a URI query parameter.
+--- @param s string
+--- @return string
+local function uri_encode(s)
+    return s:gsub('[^A-Za-z0-9%-._~]', function(c)
+        return string.format('%%%02X', c:byte())
+    end)
+end
+
 --- Generate a random token string suitable for use as --token-password.
 --- @return string
 local function generate_token()
     local seed = tostring(os.time()) .. tostring(math.random(1e9))
     return vim.fn.sha256(seed):sub(1, 32)
+end
+
+--- Resolve the command used to launch marimo.
+--- @return string|nil executable
+--- @return string[] prefix_args
+local function resolve_marimo_command()
+    if type(config.opts.marimo_bin) == 'string' and config.opts.marimo_bin ~= '' then
+        return config.opts.marimo_bin, {}
+    end
+
+    if type(config.opts.marimo_project) == 'string' and config.opts.marimo_project ~= '' then
+        return '/usr/bin/uv', {
+            'run',
+            '--project',
+            config.opts.marimo_project,
+            'marimo',
+        }
+    end
+
+    local marimo_bin = vim.fn.exepath('marimo')
+    if marimo_bin ~= '' then
+        return marimo_bin, {}
+    end
+
+    return nil, {}
+end
+
+--- Use a browser-friendly host for local URLs.
+--- @param host string
+--- @return string
+local function browser_host(host)
+    if host == '0.0.0.0' or host == '::' then
+        return '127.0.0.1'
+    end
+    return host
 end
 
 --- Attempt to contact the marimo server to confirm it is alive.
@@ -96,10 +140,39 @@ local function resolve_port()
     return DEFAULT_PORT
 end
 
+--- Fetch the skew-protection token embedded in the marimo HTML page.
+--- The server embeds it as `data-token="<value>"` in the root HTML.
+--- Returns empty string if the fetch fails (e.g. `--no-token` server with
+--- no skew protection, though marimo still requires the header).
+--- @param host string
+--- @param port integer
+--- @param file_path string|nil  Optional: include ?file= for the notebook page
+--- @return string  token (may be empty string)
+local function fetch_server_token(host, port, file_path)
+    local url = string.format('http://%s:%d/', host, port)
+    if file_path then
+        url = url .. '?file=' .. uri_encode(file_path)
+    end
+    local html = ''
+    if vim.system then
+        local out = vim.system({ 'curl', '-sf', '--max-time', '3', url }):wait()
+        if out.code ~= 0 then return '' end
+        html = out.stdout or ''
+    else
+        local handle = io.popen(string.format("curl -sf --max-time 3 '%s'", url))
+        if not handle then return '' end
+        html = handle:read('*a') or ''
+        handle:close()
+    end
+    local token = html:match('data%-token="([^"]+)"')
+    return token or ''
+end
+
 --- Connect to an already-running marimo server and return a connection descriptor.
---- @return {host: string, port: integer, token: string}|nil
+--- @param notebook_path string|nil  Optional: absolute path to the notebook, used to fetch the server token
+--- @return {host: string, port: integer, token: string, server_token: string}|nil
 --- @return string|nil  error message
-function M.connect()
+function M.connect(notebook_path)
     local host = config.opts.host or '127.0.0.1'
     local port = resolve_port()
 
@@ -108,7 +181,63 @@ function M.connect()
         return nil, err
     end
 
-    return { host = host, port = port, token = config.opts.server_token or '' }, nil
+    local server_token = config.opts.server_token or fetch_server_token(host, port, notebook_path)
+
+    return { host = host, port = port, token = '', server_token = server_token }, nil
+end
+
+--- Build the browser URL for a notebook in kiosk mode.
+--- @param conn {host: string, port: integer, token: string}
+--- @param file_path string
+--- @return string
+function M.browser_url(conn, file_path)
+    local params = {
+        'file=' .. uri_encode(file_path),
+        'kiosk=true',
+    }
+    if conn.token and conn.token ~= '' then
+        table.insert(params, 'access_token=' .. uri_encode(conn.token))
+    end
+
+    return string.format(
+        'http://%s:%d/?%s',
+        browser_host(conn.host),
+        conn.port,
+        table.concat(params, '&')
+    )
+end
+
+--- Open a notebook URL in the user's browser.
+--- @param conn {host: string, port: integer, token: string}
+--- @param file_path string
+--- @return string url
+--- @return string|nil err
+function M.open_browser(conn, file_path)
+    local url = M.browser_url(conn, file_path)
+
+    if vim.ui and vim.ui.open then
+        local ok, open_err = vim.ui.open(url)
+        if ok then
+            return url, nil
+        end
+        return url, tostring(open_err)
+    end
+
+    local opener
+    if vim.fn.executable('xdg-open') == 1 then
+        opener = { 'xdg-open', url }
+    elseif vim.fn.has('mac') == 1 and vim.fn.executable('open') == 1 then
+        opener = { 'open', url }
+    elseif vim.fn.has('win32') == 1 then
+        opener = { 'cmd', '/c', 'start', '', url }
+    end
+
+    if not opener then
+        return url, 'could not find a browser opener; open the URL manually'
+    end
+
+    vim.fn.jobstart(opener, { detach = true })
+    return url, nil
 end
 
 --- Return true if a marimo server is already reachable on the resolved port.
@@ -135,9 +264,10 @@ function M.start(file_path, opts, callback)
         return
     end
 
-    local marimo_bin = vim.fn.exepath('marimo')
-    if marimo_bin == '' then
-        callback(nil, '`marimo` not found on PATH — install it with: pip install marimo')
+    local marimo_bin, prefix_args = resolve_marimo_command()
+    if not marimo_bin then
+        callback(nil,
+            'could not find marimo; set `marimo_project`, set `marimo_bin`, or install `marimo` on PATH')
         return
     end
 
@@ -145,15 +275,14 @@ function M.start(file_path, opts, callback)
     local port  = config.opts.port or DEFAULT_PORT
     local token = generate_token()
 
-    local args = {
+    local args = vim.list_extend(prefix_args, {
         'edit',
+        '--host',           host,
         '--port',           tostring(port),
         '--token-password', token,
         '--watch',  -- reload kernel when the file changes on disk (BufWritePost)
-    }
-    if not opts.open_browser then
-        table.insert(args, '--headless')
-    end
+        '--headless',
+    })
     table.insert(args, file_path)
 
     local handle
@@ -190,7 +319,8 @@ function M.start(file_path, opts, callback)
         tries = tries + 1
         local ok, _ = ping(host, port)
         if ok then
-            callback({ host = host, port = port, token = token }, nil)
+            local server_token = fetch_server_token(host, port, file_path)
+            callback({ host = host, port = port, token = token, server_token = server_token }, nil)
             return
         end
         if tries >= max_tries then

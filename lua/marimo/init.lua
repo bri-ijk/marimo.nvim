@@ -88,14 +88,14 @@ function M.attach()
         return
     end
 
-    local conn, err = server.connect()
+    local conn, err = server.connect(path)
     if not conn then
         vim.notify('[marimo] ' .. (err or 'could not connect to marimo server'),
             vim.log.levels.ERROR)
         return
     end
 
-    attach_with_conn(bufnr, path, conn)
+    return attach_with_conn(bufnr, path, conn)
 end
 
 --- Start a marimo server for the current buffer's file and then auto-attach.
@@ -112,7 +112,15 @@ function M.start()
     -- If a server is already reachable, just attach to it.
     if server.is_running() then
         vim.notify('[marimo] server already running — attaching …', vim.log.levels.INFO)
-        M.attach()
+        local session = M.attach()
+        if session and config.opts.open_browser then
+            local url, open_err = server.open_browser(session.conn, path)
+            if open_err then
+                vim.notify('[marimo] ' .. open_err .. ': ' .. url, vim.log.levels.WARN)
+            else
+                vim.notify('[marimo] opened browser: ' .. url, vim.log.levels.INFO)
+            end
+        end
         return
     end
 
@@ -124,13 +132,17 @@ function M.start()
                 vim.notify('[marimo] ' .. err, vim.log.levels.ERROR)
                 return
             end
-            local session = attach_with_conn(bufnr, path, conn)
-            local sid = session and session.session_id or ''
-            vim.notify(
-                string.format('[marimo] open in browser: http://%s:%d?access_token=%s&session_id=%s',
-                    conn.host, conn.port, conn.token, sid),
-                vim.log.levels.INFO
-            )
+            attach_with_conn(bufnr, path, conn)
+            if config.opts.open_browser then
+                local url, open_err = server.open_browser(conn, path)
+                if open_err then
+                    vim.notify('[marimo] ' .. open_err .. ': ' .. url, vim.log.levels.WARN)
+                else
+                    vim.notify('[marimo] opened browser: ' .. url, vim.log.levels.INFO)
+                end
+            else
+                vim.notify('[marimo] browser URL: ' .. server.browser_url(conn, path), vim.log.levels.INFO)
+            end
         end)
     end)
 end

@@ -25,16 +25,24 @@ local config = require 'marimo.config'
 --- @param on_delete fun()|nil called after BufDelete tears down the session
 function M.attach(bufnr, session, on_delete)
     local group = vim.api.nvim_create_augroup('marimo-' .. bufnr, { clear = true })
+    local marimo = require 'marimo'
 
     -- Track last cell to avoid redundant focus_cell calls on column-only moves.
     local last_cell_index = nil
+    local last_session = session
 
     vim.api.nvim_create_autocmd('CursorMoved', {
         group = group,
         buffer = bufnr,
         callback = function()
+            local active_session = marimo.get_session(bufnr)
+            if not active_session then return end
+            if active_session ~= last_session then
+                last_session = active_session
+                last_cell_index = nil
+            end
             if not config.opts.follow_cursor then return end
-            if not session.ready then return end
+            if not active_session.ready then return end
 
             local cursor_line = vim.api.nvim_win_get_cursor(0)[1] -- 1-based
             local idx = parser.cell_index_at_line(bufnr, cursor_line)
@@ -43,7 +51,7 @@ function M.attach(bufnr, session, on_delete)
             if idx == last_cell_index then return end -- same cell, skip
 
             last_cell_index = idx
-            session:focus_cell(idx)
+            active_session:focus_cell(idx)
         end,
     })
 
