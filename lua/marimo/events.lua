@@ -1,12 +1,17 @@
 --- events.lua
---- Per-buffer autocmds for cursor tracking and file-save refresh.
+--- Per-buffer autocmds for cursor tracking and cleanup.
 ---
 --- For each attached buffer we create an augroup named
 ---   'marimo-<bufnr>'
 --- containing:
 ---   CursorMoved  → compute cell index from cursor line → session:focus_cell()
----   BufWritePost → session:refresh() to re-sync cell_ids after saves
 ---   BufDelete    → clean up the session for this buffer
+---
+--- Note: BufWritePost does NOT reconnect the WebSocket. The plugin starts
+--- marimo with --watch, which enables SessionFileWatcherExtension on the
+--- server side — it detects file changes on disk and reloads the kernel
+--- automatically. Reconnecting on every save causes session conflicts and
+--- spurious disconnects.
 
 local M = {}
 
@@ -20,16 +25,24 @@ local config = require 'marimo.config'
 --- @param on_delete fun()|nil called after BufDelete tears down the session
 function M.attach(bufnr, session, on_delete)
     local group = vim.api.nvim_create_augroup('marimo-' .. bufnr, { clear = true })
+    local marimo = require 'marimo'
 
     -- Track last cell to avoid redundant focus_cell calls on column-only moves.
     local last_cell_index = nil
+    local last_session = session
 
     vim.api.nvim_create_autocmd('CursorMoved', {
         group = group,
         buffer = bufnr,
         callback = function()
+            local active_session = marimo.get_session(bufnr)
+            if not active_session then return end
+            if active_session ~= last_session then
+                last_session = active_session
+                last_cell_index = nil
+            end
             if not config.opts.follow_cursor then return end
-            if not session.ready then return end
+            if not active_session.ready then return end
 
             local cursor_line = vim.api.nvim_win_get_cursor(0)[1] -- 1-based
             local idx = parser.cell_index_at_line(bufnr, cursor_line)
@@ -38,19 +51,14 @@ function M.attach(bufnr, session, on_delete)
             if idx == last_cell_index then return end -- same cell, skip
 
             last_cell_index = idx
-            session:focus_cell(idx)
+            active_session:focus_cell(idx)
         end,
     })
 
     -- After saving, cell order may have changed — refresh cell_ids from server.
-    vim.api.nvim_create_autocmd('BufWritePost', {
-        group = group,
-        buffer = bufnr,
-        callback = function()
-            session:refresh()
-            last_cell_index = nil -- force re-send on next cursor move
-        end,
-    })
+    -- NOTE: disabled. Marimo's file watcher reloads the kernel on save
+    -- automatically; reconnecting the WebSocket here causes 403 conflicts.
+    -- session:refresh() is kept available for manual use if needed.
 
     -- When the buffer is deleted, tear down the session and notify init.lua so
     -- it can remove the entry from its _sessions registry.

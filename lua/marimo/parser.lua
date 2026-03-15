@@ -15,6 +15,54 @@
 
 local M = {}
 
+--- Strip one marimo wrapper indentation level from each line.
+--- @param lines string[]
+--- @return string[]
+local function deindent_cell_body(lines)
+    local body = {}
+    for _, line in ipairs(lines) do
+        body[#body + 1] = line:gsub('^    ', '', 1)
+    end
+    return body
+end
+
+--- Remove the generated top-level `return ...` block that marimo saves at the
+--- end of each cell wrapper. This keeps only the executable cell body.
+---
+--- We remove from the last line matching exactly one wrapper indentation level
+--- (`"    return"`) to the end of the extracted function body, which handles
+--- both one-line and multi-line tuple returns without touching nested returns.
+---
+--- @param lines string[]
+--- @return string[]
+local function strip_generated_return(lines)
+    local return_start = nil
+    for i = #lines, 1, -1 do
+        if lines[i]:match('^    return%f[%W]') or lines[i] == '    return' then
+            return_start = i
+            break
+        end
+    end
+
+    local last = #lines
+    while last > 0 and lines[last]:match('^%s*$') do
+        last = last - 1
+    end
+
+    if return_start and return_start <= last then
+        last = return_start - 1
+        while last > 0 and lines[last]:match('^%s*$') do
+            last = last - 1
+        end
+    end
+
+    local body = {}
+    for i = 1, last do
+        body[#body + 1] = lines[i]
+    end
+    return body
+end
+
 -- Pattern that matches the start of any marimo cell-like block.
 local CELL_PATTERNS = {
     '^@app%.cell',
@@ -80,6 +128,57 @@ function M.cell_index_at_line(bufnr, cursor_line)
     end
 
     return nil -- cursor is above the first cell
+end
+
+--- Return the raw marimo cell code body for a 0-based cell index.
+--- For `@app.cell`-style cells, this strips decorators and the `def` wrapper,
+--- then de-indents the function body by one level. For `with app.setup:` cells,
+--- it returns the indented block body.
+---
+--- @param bufnr integer
+--- @param cell_index integer  0-based
+--- @return string|nil
+function M.cell_code_at_index(bufnr, cell_index)
+    local ranges = M.get_cell_ranges(bufnr)
+    local range = ranges[cell_index + 1]
+    if not range then
+        return nil
+    end
+
+    local lines = vim.api.nvim_buf_get_lines(bufnr, range.start - 1, range.finish, false)
+    if #lines == 0 then
+        return nil
+    end
+
+    if lines[1]:match('^with%s+app%.setup%s*:') then
+        local body = {}
+        for i = 2, #lines do
+            body[#body + 1] = lines[i]
+        end
+        return table.concat(deindent_cell_body(body), '\n')
+    end
+
+    local def_line = nil
+    for i, line in ipairs(lines) do
+        if line:match('^def%s+') or line:match('^async%s+def%s+') then
+            def_line = i
+            break
+        end
+    end
+
+    if not def_line then
+        return nil
+    end
+
+    local body = {}
+    for i = def_line + 1, #lines do
+        body[#body + 1] = lines[i]
+    end
+
+    body = strip_generated_return(body)
+    body = deindent_cell_body(body)
+
+    return table.concat(body, '\n')
 end
 
 return M

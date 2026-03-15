@@ -11,8 +11,16 @@ M.opts = {
     -- websocat is required for WebSocket communication (neovim has no built-in WS client).
     -- Install with: cargo install websocat, or from https://github.com/vi/websocat
     websocat_bin = nil,
-    -- Marimo server token. Usually not needed — auto-obtained from the server.
+    -- Explicit marimo executable path for :MarimoStart.
+    -- Example: '/home/user/.local/bin/marimo'
+    marimo_bin = nil,
+    -- Temporary local marimo checkout for :MarimoStart.
+    -- When set, the plugin runs: uv run --project <dir> marimo ...
+    marimo_project = nil,
+    -- Marimo server token. Optional; set this if your server is configured to require a token.
     server_token = nil,
+    -- Whether to open the browser automatically when starting the marimo server.
+    open_browser = true,
 }
 
 --- Merge user opts into defaults.

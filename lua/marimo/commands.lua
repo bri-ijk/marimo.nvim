@@ -2,8 +2,11 @@
 --- Registers user-facing Neovim commands for the marimo plugin.
 ---
 --- Commands:
+---   :MarimoStart           Launch marimo edit for the current file and auto-attach
+---   :MarimoStop            Stop the plugin-managed marimo server and detach
 ---   :MarimoAttach          Connect current buffer to a running marimo server
 ---   :MarimoDetach          Disconnect current buffer
+---   :MarimoRunCell         Run the cell under the cursor
 ---   :MarimoToggleFollow    Toggle automatic cursor-follow (follow_cursor option)
 ---   :MarimoStatus          Print connection status for the current buffer
 
@@ -12,6 +15,14 @@ local M = {}
 local function create_commands()
     local marimo = require 'marimo'
 
+    vim.api.nvim_create_user_command('MarimoStart', function()
+        marimo.start()
+    end, { desc = 'Start marimo edit for the current file and auto-attach' })
+
+    vim.api.nvim_create_user_command('MarimoStop', function()
+        marimo.stop()
+    end, { desc = 'Stop the plugin-managed marimo server and detach' })
+
     vim.api.nvim_create_user_command('MarimoAttach', function()
         marimo.attach()
     end, { desc = 'Connect the current marimo notebook buffer to a running server' })
@@ -19,6 +30,10 @@ local function create_commands()
     vim.api.nvim_create_user_command('MarimoDetach', function()
         marimo.detach()
     end, { desc = 'Disconnect the current marimo notebook buffer from the server' })
+
+    vim.api.nvim_create_user_command('MarimoRunCell', function()
+        marimo.run_cell()
+    end, { desc = 'Run the marimo cell under the cursor' })
 
     vim.api.nvim_create_user_command('MarimoToggleFollow', function()
         marimo.toggle_follow()
