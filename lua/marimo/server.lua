@@ -147,11 +147,19 @@ end
 --- @param host string
 --- @param port integer
 --- @param file_path string|nil  Optional: include ?file= for the notebook page
+--- @param access_token string|nil  Optional: include ?access_token= for auth-protected servers
 --- @return string  token (may be empty string)
-local function fetch_server_token(host, port, file_path)
+local function fetch_server_token(host, port, file_path, access_token)
     local url = string.format('http://%s:%d/', host, port)
+    local params = {}
     if file_path then
-        url = url .. '?file=' .. uri_encode(file_path)
+        table.insert(params, 'file=' .. uri_encode(file_path))
+    end
+    if access_token and access_token ~= '' then
+        table.insert(params, 'access_token=' .. uri_encode(access_token))
+    end
+    if #params > 0 then
+        url = url .. '?' .. table.concat(params, '&')
     end
     local html = ''
     if vim.system then
@@ -274,6 +282,16 @@ function M.start(file_path, opts, callback)
     local host  = config.opts.host or '127.0.0.1'
     local port  = config.opts.port or DEFAULT_PORT
     local token = generate_token()
+    local exited = false
+    local exit_code = 0
+    local stderr_chunks = {}
+    local done = false
+
+    local function finish(conn, err)
+        if done then return end
+        done = true
+        callback(conn, err)
+    end
 
     local args = vim.list_extend(prefix_args, {
         'edit',
@@ -286,7 +304,18 @@ function M.start(file_path, opts, callback)
     table.insert(args, file_path)
 
     local handle
-    handle = vim.uv.spawn(marimo_bin, { args = args, detached = false }, function(code, _signal)
+    local stderr_pipe = assert(vim.uv.new_pipe())
+    handle = vim.uv.spawn(marimo_bin, {
+        args = args,
+        detached = false,
+        stdio = { nil, nil, stderr_pipe },
+    }, function(code, _signal)
+        exited = true
+        exit_code = code
+        if stderr_pipe and not stderr_pipe:is_closing() then
+            stderr_pipe:read_stop()
+            stderr_pipe:close()
+        end
         if handle and not handle:is_closing() then
             handle:close()
         end
@@ -295,15 +324,33 @@ function M.start(file_path, opts, callback)
         end
         if code ~= 0 then
             vim.schedule(function()
-                vim.notify('[marimo] server process exited with code ' .. code, vim.log.levels.WARN)
+                local stderr_text = vim.trim(table.concat(stderr_chunks, ''))
+                if stderr_text ~= '' then
+                    finish(nil, string.format(
+                        'server process exited with code %d: %s',
+                        code,
+                        stderr_text
+                    ))
+                else
+                    finish(nil, 'server process exited with code ' .. code)
+                end
             end)
         end
     end)
 
     if not handle then
+        stderr_pipe:close()
         callback(nil, 'failed to spawn marimo process')
         return
     end
+
+    stderr_pipe:read_start(function(_, data)
+        if not data then return end
+        table.insert(stderr_chunks, data)
+        if #stderr_chunks > 20 then
+            table.remove(stderr_chunks, 1)
+        end
+    end)
 
     _proc = handle
 
@@ -316,16 +363,30 @@ function M.start(file_path, opts, callback)
     local max_tries = 40  -- 40 × 500 ms = 20 s
 
     local function poll()
+        if done then return end
         tries = tries + 1
+        if exited then
+            local stderr_text = vim.trim(table.concat(stderr_chunks, ''))
+            if stderr_text ~= '' then
+                finish(nil, string.format(
+                    'server process exited with code %d: %s',
+                    exit_code,
+                    stderr_text
+                ))
+            else
+                finish(nil, 'server process exited with code ' .. exit_code)
+            end
+            return
+        end
         local ok, _ = ping(host, port)
         if ok then
-            local server_token = fetch_server_token(host, port, file_path)
-            callback({ host = host, port = port, token = token, server_token = server_token }, nil)
+            local server_token = fetch_server_token(host, port, file_path, token)
+            finish({ host = host, port = port, token = token, server_token = server_token }, nil)
             return
         end
         if tries >= max_tries then
             M.stop()
-            callback(nil, string.format(
+            finish(nil, string.format(
                 'marimo server did not become ready after %d s on port %d',
                 max_tries * 0.5, port))
             return
