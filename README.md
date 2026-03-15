@@ -67,6 +67,7 @@ To connect to a server you already started manually:
 | `:MarimoStop` | Stop the managed server and disconnect |
 | `:MarimoAttach` | Connect to an already-running Marimo server |
 | `:MarimoDetach` | Disconnect the current buffer |
+| `:MarimoRunCell` | Run the marimo cell under the cursor |
 | `:MarimoToggleFollow` | Toggle automatic browser scroll on cursor movement |
 | `:MarimoStatus` | Show connection status for the current buffer |
 

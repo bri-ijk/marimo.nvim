@@ -14,10 +14,91 @@ local M = {}
 local config = require 'marimo.config'
 
 local DEFAULT_PORT = 2718
+local PID_FILE = vim.fn.stdpath('state') .. '/marimo.nvim.pid'
 
 --- Handle for the marimo process started by M.start(), nil when not running.
 --- @type uv_process_t|nil
 local _proc = nil
+
+--- PID for the marimo process started by M.start(), if known.
+--- @type integer|nil
+local _proc_pid = nil
+
+--- Persist the managed marimo pid so :MarimoStop still works after restarting
+--- Neovim.
+--- @param pid integer
+local function write_pid_file(pid)
+    vim.fn.mkdir(vim.fn.stdpath('state'), 'p')
+    vim.fn.writefile({ tostring(pid) }, PID_FILE)
+end
+
+--- Read the last managed marimo pid, if any.
+--- @return integer|nil
+local function read_pid_file()
+    if vim.fn.filereadable(PID_FILE) == 0 then
+        return nil
+    end
+    local lines = vim.fn.readfile(PID_FILE)
+    local pid = tonumber(lines[1])
+    return pid
+end
+
+--- Remove the managed marimo pid file.
+local function clear_pid_file()
+    if vim.fn.filereadable(PID_FILE) == 1 then
+        vim.fn.delete(PID_FILE)
+    end
+end
+
+--- Return true if a pid currently exists.
+--- @param pid integer
+--- @return boolean
+local function pid_is_alive(pid)
+    return pcall(vim.uv.kill, pid, 0)
+end
+
+--- Best-effort validation that a pid still looks like a marimo edit process.
+--- @param pid integer
+--- @return boolean
+local function is_marimo_pid(pid)
+    if vim.fn.filereadable(string.format('/proc/%d/cmdline', pid)) == 0 then
+        return true
+    end
+
+    local f = io.open(string.format('/proc/%d/cmdline', pid), 'rb')
+    if not f then
+        return true
+    end
+
+    local raw = f:read('*a') or ''
+    f:close()
+    local cmdline = raw:gsub('%z', ' ')
+    return cmdline:match('marimo') ~= nil and cmdline:match('edit') ~= nil
+end
+
+--- Send termination signals to a managed marimo pid.
+--- @param pid integer
+--- @return boolean
+local function stop_pid(pid)
+    if not pid or not pid_is_alive(pid) then
+        clear_pid_file()
+        return false
+    end
+    if not is_marimo_pid(pid) then
+        return false
+    end
+
+    pcall(vim.uv.kill, pid, 'sigterm')
+    vim.defer_fn(function()
+        if pid_is_alive(pid) then
+            pcall(vim.uv.kill, pid, 'sigkill')
+        end
+        if not pid_is_alive(pid) then
+            clear_pid_file()
+        end
+    end, 1500)
+    return true
+end
 
 --- Percent-encode a string for safe use in a URI query parameter.
 --- @param s string
@@ -322,6 +403,10 @@ function M.start(file_path, opts, callback)
         if _proc == handle then
             _proc = nil
         end
+        if _proc_pid == handle:get_pid() then
+            _proc_pid = nil
+            clear_pid_file()
+        end
         if code ~= 0 then
             vim.schedule(function()
                 local stderr_text = vim.trim(table.concat(stderr_chunks, ''))
@@ -353,6 +438,8 @@ function M.start(file_path, opts, callback)
     end)
 
     _proc = handle
+    _proc_pid = handle:get_pid()
+    write_pid_file(_proc_pid)
 
     vim.api.nvim_create_autocmd('VimLeavePre', {
         once = true,
@@ -398,14 +485,24 @@ function M.start(file_path, opts, callback)
 end
 
 --- Kill the marimo process started by M.start(), if any.
+--- @return boolean stopped
 function M.stop()
-    if _proc then
-        if not _proc:is_closing() then
-            _proc:kill('sigterm')
-            _proc:close()
-        end
-        _proc = nil
+    local pid = _proc_pid or read_pid_file()
+    local stopped = false
+
+    if pid then
+        stopped = stop_pid(pid)
+    else
+        clear_pid_file()
     end
+
+    if _proc and not _proc:is_closing() then
+        _proc:close()
+    end
+    _proc = nil
+    _proc_pid = nil
+
+    return stopped
 end
 
 return M

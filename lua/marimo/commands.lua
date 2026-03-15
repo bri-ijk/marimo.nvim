@@ -6,6 +6,7 @@
 ---   :MarimoStop            Stop the plugin-managed marimo server and detach
 ---   :MarimoAttach          Connect current buffer to a running marimo server
 ---   :MarimoDetach          Disconnect current buffer
+---   :MarimoRunCell         Run the cell under the cursor
 ---   :MarimoToggleFollow    Toggle automatic cursor-follow (follow_cursor option)
 ---   :MarimoStatus          Print connection status for the current buffer
 
@@ -29,6 +30,10 @@ local function create_commands()
     vim.api.nvim_create_user_command('MarimoDetach', function()
         marimo.detach()
     end, { desc = 'Disconnect the current marimo notebook buffer from the server' })
+
+    vim.api.nvim_create_user_command('MarimoRunCell', function()
+        marimo.run_cell()
+    end, { desc = 'Run the marimo cell under the cursor' })
 
     vim.api.nvim_create_user_command('MarimoToggleFollow', function()
         marimo.toggle_follow()

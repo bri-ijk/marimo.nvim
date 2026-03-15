@@ -405,6 +405,51 @@ function M:focus_cell(cell_index)
     end)
 end
 
+--- Execute the cell at the given 0-based index with the provided code body.
+--- POSTs to /api/kernel/run.
+---
+--- @param cell_index integer
+--- @param code string
+function M:run_cell(cell_index, code)
+    if not self.ready then return end
+
+    local cell_id = self.cell_ids[cell_index + 1]
+    if not cell_id then return end
+
+    local url = string.format(
+        'http://%s:%d/api/kernel/run',
+        self.conn.host, self.conn.port
+    )
+    if self.conn.token and self.conn.token ~= '' then
+        url = url .. '?access_token=' .. self.conn.token
+    end
+
+    vim.system({
+        'curl', '-sf', '-X', 'POST',
+        '-H', 'Content-Type: application/json',
+        '-H', 'Marimo-Session-Id: ' .. self.session_id,
+        '-H', 'Marimo-Server-Token: ' .. (self.conn.server_token or ''),
+        '-d', vim.json.encode({
+            cellIds = { cell_id },
+            codes = { code },
+        }),
+        url,
+    }, { text = true }, function(out)
+        if out.code ~= 0 then
+            vim.schedule(function()
+                vim.notify(
+                    string.format(
+                        '[marimo] run_cell failed (code=%d): %s',
+                        out.code,
+                        vim.trim(out.stderr or out.stdout or '')
+                    ),
+                    vim.log.levels.WARN
+                )
+            end)
+        end
+    end)
+end
+
 --- Request a fresh kernel-ready by closing and reopening the WebSocket.
 --- Call this after `:w` when cells may have been reordered in the file.
 --- The session_id is preserved so marimo recognises the reconnect as the

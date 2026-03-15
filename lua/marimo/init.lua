@@ -20,6 +20,7 @@ local config    = require 'marimo.config'
 local server    = require 'marimo.server'
 local Session   = require 'marimo.session'
 local events    = require 'marimo.events'
+local parser    = require 'marimo.parser'
 
 --- Registry of active sessions keyed by bufnr.
 --- @type table<integer, table>
@@ -153,8 +154,11 @@ function M.stop()
     if _sessions[bufnr] then
         M.detach(bufnr)
     end
-    server.stop()
-    vim.notify('[marimo] server stopped', vim.log.levels.INFO)
+    if server.stop() then
+        vim.notify('[marimo] stopping managed server', vim.log.levels.INFO)
+    else
+        vim.notify('[marimo] no managed server found', vim.log.levels.WARN)
+    end
 end
 
 --- Detach the current (or specified) buffer from its marimo session.
@@ -201,6 +205,36 @@ function M.status()
         string.format('  notebook    : %s', session.notebook_path),
     }
     vim.notify('[marimo] status\n' .. table.concat(lines, '\n'), vim.log.levels.INFO)
+end
+
+--- Run the marimo cell under the cursor.
+function M.run_cell()
+    local bufnr = vim.api.nvim_get_current_buf()
+    local session = _sessions[bufnr]
+
+    if not session then
+        vim.notify('[marimo] not attached (run :MarimoAttach)', vim.log.levels.WARN)
+        return
+    end
+    if not session.ready then
+        vim.notify('[marimo] session is not ready yet', vim.log.levels.WARN)
+        return
+    end
+
+    local cursor_line = vim.api.nvim_win_get_cursor(0)[1]
+    local idx = parser.cell_index_at_line(bufnr, cursor_line)
+    if idx == nil then
+        vim.notify('[marimo] cursor is not inside a marimo cell', vim.log.levels.WARN)
+        return
+    end
+
+    local code = parser.cell_code_at_index(bufnr, idx)
+    if code == nil then
+        vim.notify('[marimo] could not extract cell code from buffer', vim.log.levels.WARN)
+        return
+    end
+
+    session:run_cell(idx, code)
 end
 
 --- Return the active session for a buffer (nil if not attached).
