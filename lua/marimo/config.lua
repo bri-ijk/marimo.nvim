@@ -1,6 +1,6 @@
 local M = {}
 
-M.opts = {
+local DEFAULT_OPTS = {
 	-- Port marimo is running on. Set to nil to auto-detect from running processes.
 	port = nil,
 	-- Host marimo is running on.
@@ -23,10 +23,12 @@ M.opts = {
 	open_browser = true,
 }
 
+M.opts = vim.deepcopy(DEFAULT_OPTS)
+
 --- Merge user opts into defaults.
 --- @param opts table|nil
 function M.setup(opts)
-	M.opts = vim.tbl_deep_extend("force", M.opts, opts or {})
+	M.opts = vim.tbl_deep_extend("force", vim.deepcopy(DEFAULT_OPTS), opts or {})
 end
 
 return M
