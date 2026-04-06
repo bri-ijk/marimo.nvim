@@ -7,6 +7,7 @@
 ---   :MarimoAttach          Connect current buffer to a running marimo server
 ---   :MarimoDetach          Disconnect current buffer
 ---   :MarimoRunCell         Run the cell under the cursor
+---   :MarimoRunAll          Run all cells in the current buffer
 ---   :MarimoToggleFollow    Toggle automatic cursor-follow (follow_cursor option)
 ---   :MarimoStatus          Print connection status for the current buffer
 
