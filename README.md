@@ -11,13 +11,10 @@ no terminal required.
 - Connects as a background kiosk client so the browser session is never
   interrupted
 - Per-buffer: attach and detach independently for multiple open notebooks
+- Run a single cell (`:MarimoRunCell`) or all cells (`:MarimoRunAll`)
 - Toggle cursor-follow on/off with `:MarimoToggleFollow`
-
-> [!IMPORTANT]
-> Browser scroll-to-cell on cursor movement depends on
-> [marimo-team/marimo #8497](https://github.com/marimo-team/marimo/pull/8497)
-> which is not yet merged. The plugin connects and tracks cells correctly but
-> the browser will not scroll until that PR lands.
+- Browser scroll-to-cell on cursor movement is supported on current marimo
+  stable releases via `POST /api/kernel/focus_cell`
 
 ## Dependencies
 
@@ -68,6 +65,7 @@ To connect to a server you already started manually:
 | `:MarimoAttach` | Connect to an already-running Marimo server |
 | `:MarimoDetach` | Disconnect the current buffer |
 | `:MarimoRunCell` | Run the marimo cell under the cursor |
+| `:MarimoRunAll` | Run all marimo cells in the current buffer |
 | `:MarimoToggleFollow` | Toggle automatic browser scroll on cursor movement |
 | `:MarimoStatus` | Show connection status for the current buffer |
 
@@ -94,7 +92,6 @@ require('marimo').setup({
   host = '127.0.0.1',
 
   -- Automatically scroll the browser when the cursor moves to a new cell.
-  -- Requires marimo-team/marimo#8497 to be merged before this has any effect.
   follow_cursor = true,
 
   -- Path to the websocat binary. nil = use 'websocat' from PATH.
@@ -106,7 +103,7 @@ require('marimo').setup({
 `http://localhost:2718/?file=/path/to/notebook.py&kiosk=true`, so the browser
 can receive focus-sync notifications without taking over the main session.
 
-For local marimo development, prefer:
+For local marimo development, you can point the plugin at a checkout with:
 
 ```lua
 require('marimo').setup({
@@ -117,9 +114,6 @@ require('marimo').setup({
 `marimo_project` is intended as a temporary development override while testing
 against a local marimo checkout. For normal use, leave it unset and let the
 plugin use your installed `marimo` binary.
-
-Once the feature is merged and you switch back to a normal install, remove that
-override and let the plugin use `marimo` from PATH again.
 
 ### websocat via Mason
 
