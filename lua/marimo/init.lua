@@ -243,7 +243,7 @@ function M.run_all_cells()
 		return
 	end
 
-	for i = 0, #session.cell_ids do
+	for i = 0, (#session.cell_ids - 1) do
 		local cell_code = parser.cell_code_at_index(bufnr, i)
 		if cell_code == nil then
 			vim.notify("[marimo] could not extract cell code from buffer", vim.log.levels.WARN)
