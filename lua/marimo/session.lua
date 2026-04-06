@@ -82,6 +82,7 @@ function M.new(conn, notebook_path)
     self._retry_count = 0 -- reconnect attempts since last successful connect
     self._kiosk = false   -- switched to true if browser is already connected
     self._connect_gen = 0 -- incremented each connect(); EOF ignores stale generations
+    self._focus_cell_supported = nil -- nil=unknown, false=endpoint missing
 
     return self
 end
@@ -369,6 +370,7 @@ end
 --- @param cell_index integer  0-based cell index matching kernel-ready order
 function M:focus_cell(cell_index)
     if not self.ready then return end
+    if self._focus_cell_supported == false then return end
 
     -- cell_ids is 1-based in Lua; cell_index is 0-based from the parser.
     local cell_id = self.cell_ids[cell_index + 1]
@@ -382,26 +384,76 @@ function M:focus_cell(cell_index)
         url = url .. '?access_token=' .. self.conn.token
     end
 
-    vim.system({
-        'curl', '-sf', '-X', 'POST',
-        '-H', 'Content-Type: application/json',
-        '-H', 'Marimo-Session-Id: ' .. self.session_id,
-        '-H', 'Marimo-Server-Token: ' .. (self.conn.server_token or ''),
-        '-d', vim.json.encode({ cellId = cell_id }),
-        url,
-    }, { text = true }, function(out)
-        if out.code ~= 0 then
-            vim.schedule(function()
+    local function post_focus(payload, payload_name, on_done)
+        vim.system({
+            'curl', '-sS', '-X', 'POST',
+            '-H', 'Content-Type: application/json',
+            '-H', 'Marimo-Session-Id: ' .. self.session_id,
+            '-H', 'Marimo-Server-Token: ' .. (self.conn.server_token or ''),
+            '-d', vim.json.encode(payload),
+            '-w', '\n%{http_code}',
+            url,
+        }, { text = true }, function(out)
+            local stdout = out.stdout or ''
+            local body, status = stdout:match('^(.*)\n(%d%d%d)%s*$')
+            status = tonumber(status)
+            if not body then
+                body = stdout
+            end
+            on_done(out, status, body, payload_name)
+        end)
+    end
+
+    local function notify_focus_failure(out, status, body, payload_name)
+        vim.schedule(function()
+            if status == 404 then
+                self._focus_cell_supported = false
                 vim.notify(
-                    string.format(
-                        '[marimo] focus_cell failed (code=%d): %s',
-                        out.code,
-                        vim.trim(out.stderr or out.stdout or '')
-                    ),
+                    '[marimo] focus_cell endpoint not found (HTTP 404). '
+                        .. 'This server likely does not expose /api/kernel/focus_cell '
+                        .. '(older marimo build or a different marimo process/port).',
                     vim.log.levels.WARN
                 )
-            end)
+                return
+            end
+
+            local parts = { string.format('curl=%d', out.code) }
+            if status then
+                table.insert(parts, string.format('http=%d', status))
+            end
+            if payload_name then
+                table.insert(parts, string.format('payload=%s', payload_name))
+            end
+            local stderr = vim.trim(out.stderr or '')
+            if stderr ~= '' then
+                table.insert(parts, stderr)
+            end
+            local response_body = vim.trim(body or '')
+            if response_body ~= '' then
+                table.insert(parts, response_body)
+            end
+            local details = table.concat(parts, ' ')
+            vim.notify('[marimo] focus_cell failed: ' .. details, vim.log.levels.WARN)
+        end)
+    end
+
+    post_focus({ cellId = cell_id }, 'cellId', function(out, status, body, payload_name)
+        if out.code == 0 and status and status < 400 then
+            return
         end
+
+        -- Backward-compat fallback for servers that still expect snake_case.
+        if status == 400 or status == 422 then
+            post_focus({ cell_id = cell_id }, 'cell_id', function(out2, status2, body2, payload_name2)
+                if out2.code == 0 and status2 and status2 < 400 then
+                    return
+                end
+                notify_focus_failure(out2, status2, body2, payload_name2)
+            end)
+            return
+        end
+
+        notify_focus_failure(out, status, body, payload_name)
     end)
 end
 
