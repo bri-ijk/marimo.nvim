@@ -15,6 +15,10 @@
 
 local M = {}
 
+--- Per-buffer cache of parsed cell ranges keyed by changedtick.
+--- @type table<integer, {tick: integer, lines: string[], ranges: {start: integer, finish: integer}[]}>
+local _cache = {}
+
 --- Strip one marimo wrapper indentation level from each line.
 --- @param lines string[]
 --- @return string[]
@@ -89,6 +93,13 @@ end
 --- @param bufnr integer  buffer handle (0 = current)
 --- @return {start: integer, finish: integer}[]
 function M.get_cell_ranges(bufnr)
+	bufnr = bufnr == 0 and vim.api.nvim_get_current_buf() or bufnr
+	local tick = vim.api.nvim_buf_get_changedtick(bufnr)
+	local cached = _cache[bufnr]
+	if cached and cached.tick == tick then
+		return cached.ranges
+	end
+
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 	local ranges = {}
 	local current_start = nil
@@ -105,6 +116,7 @@ function M.get_cell_ranges(bufnr)
 	end
 
 	-- If no delimiters found the file is not a valid marimo notebook.
+	_cache[bufnr] = { tick = tick, lines = lines, ranges = ranges }
 	return ranges
 end
 
@@ -139,13 +151,26 @@ end
 --- @param cell_index integer  0-based
 --- @return string|nil
 function M.cell_code_at_index(bufnr, cell_index)
+	bufnr = bufnr == 0 and vim.api.nvim_get_current_buf() or bufnr
 	local ranges = M.get_cell_ranges(bufnr)
 	local range = ranges[cell_index + 1]
 	if not range then
 		return nil
 	end
 
-	local lines = vim.api.nvim_buf_get_lines(bufnr, range.start - 1, range.finish, false)
+	local tick = vim.api.nvim_buf_get_changedtick(bufnr)
+	local cached = _cache[bufnr]
+	local full_lines
+	if cached and cached.tick == tick then
+		full_lines = cached.lines
+	else
+		full_lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+	end
+
+	local lines = {}
+	for i = range.start, range.finish do
+		lines[#lines + 1] = full_lines[i]
+	end
 	if #lines == 0 then
 		return nil
 	end
