@@ -21,6 +21,17 @@ local DEFAULT_OPTS = {
 	server_token = nil,
 	-- Whether to open the browser automatically when starting the marimo server.
 	open_browser = true,
+	-- Buffer-local keymaps for Python files. Set to false to disable.
+	keys = {
+		{ mode = "n", lhs = "<localleader>s", cmd = "MarimoRunCell", desc = "Run marimo cell under cursor" },
+		{ mode = "n", lhs = "<localleader>S", cmd = "MarimoRunAll", desc = "Run all marimo cells in buffer" },
+		{ mode = "n", lhs = "<localleader>rf", cmd = "MarimoStart", desc = "Start marimo and attach" },
+		{ mode = "n", lhs = "<localleader>rq", cmd = "MarimoStop", desc = "Stop managed marimo server" },
+		{ mode = "n", lhs = "<localleader>ra", cmd = "MarimoAttach", desc = "Attach buffer to marimo" },
+		{ mode = "n", lhs = "<localleader>rd", cmd = "MarimoDetach", desc = "Detach buffer from marimo" },
+		{ mode = "n", lhs = "<localleader>i", cmd = "MarimoStatus", desc = "Show marimo status" },
+		{ mode = "n", lhs = "<localleader>f", cmd = "MarimoToggleFollow", desc = "Toggle marimo follow" },
+	},
 }
 
 M.opts = vim.deepcopy(DEFAULT_OPTS)
