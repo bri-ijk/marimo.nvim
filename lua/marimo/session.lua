@@ -14,18 +14,9 @@ local M = {}
 M.__index = M
 
 local config = require("marimo.config")
+local util = require("marimo.util")
 
 -- Helpers
-
---- Percent-encode a string for safe use in a URI query parameter.
---- Encodes everything except unreserved characters (RFC 3986 §2.3).
---- @param s string
---- @return string
-local function uri_encode(s)
-	return s:gsub("[^A-Za-z0-9%-._~]", function(c)
-		return string.format("%%%02X", c:byte())
-	end)
-end
 
 --- Generate a marimo-compatible session_id.
 --- The frontend validates against /^s_[\da-z]{6}$/ and only reuses the id
@@ -53,6 +44,49 @@ local function find_websocat()
 		return found
 	end
 	return nil
+end
+
+--- Build the URL for a kernel HTTP endpoint.
+--- @param path string
+--- @return string
+local function kernel_url(self, path)
+	local url = string.format("http://%s:%d%s", self.conn.host, self.conn.port, path)
+	if self.conn.token and self.conn.token ~= "" then
+		url = url .. "?access_token=" .. self.conn.token
+	end
+	return url
+end
+
+--- POST a JSON payload to a kernel endpoint and report curl + HTTP status.
+--- @param path string
+--- @param payload table
+--- @param on_done fun(out: table, status: integer|nil, body: string)
+local function post_kernel_json(self, path, payload, on_done)
+	vim.system({
+		"curl",
+		"-sS",
+		"-X",
+		"POST",
+		"-H",
+		"Content-Type: application/json",
+		"-H",
+		"Marimo-Session-Id: " .. self.session_id,
+		"-H",
+		"Marimo-Server-Token: " .. (self.conn.server_token or ""),
+		"-d",
+		vim.json.encode(payload),
+		"-w",
+		"\n%{http_code}",
+		kernel_url(self, path),
+	}, { text = true }, function(out)
+		local stdout = out.stdout or ""
+		local body, status = stdout:match("^(.*)\n(%d%d%d)%s*$")
+		status = tonumber(status)
+		if not body then
+			body = stdout
+		end
+		on_done(out, status, body)
+	end)
 end
 
 --- Create a new Session for the given connection descriptor and notebook path.
@@ -189,7 +223,7 @@ function M:connect(on_ready)
 		self.conn.host,
 		self.conn.port,
 		self.session_id,
-		uri_encode(self.notebook_path),
+		util.uri_encode(self.notebook_path),
 		self.conn.token,
 		kiosk_suffix
 	)
@@ -371,7 +405,7 @@ end
 -- Public: focus a cell
 
 --- Tell the browser to scroll to the cell at the given 0-based index.
---- POSTs to /api/kernel/focus_cell (requires marimo>=0.22 / PR #8497).
+--- POSTs to /api/kernel/focus_cell (marimo >= 0.22).
 ---
 --- @param cell_index integer  0-based cell index matching kernel-ready order
 function M:focus_cell(cell_index)
@@ -388,35 +422,8 @@ function M:focus_cell(cell_index)
 		return
 	end
 
-	local url = string.format("http://%s:%d/api/kernel/focus_cell", self.conn.host, self.conn.port)
-	if self.conn.token and self.conn.token ~= "" then
-		url = url .. "?access_token=" .. self.conn.token
-	end
-
 	local function post_focus(payload, payload_name, on_done)
-		vim.system({
-			"curl",
-			"-sS",
-			"-X",
-			"POST",
-			"-H",
-			"Content-Type: application/json",
-			"-H",
-			"Marimo-Session-Id: " .. self.session_id,
-			"-H",
-			"Marimo-Server-Token: " .. (self.conn.server_token or ""),
-			"-d",
-			vim.json.encode(payload),
-			"-w",
-			"\n%{http_code}",
-			url,
-		}, { text = true }, function(out)
-			local stdout = out.stdout or ""
-			local body, status = stdout:match("^(.*)\n(%d%d%d)%s*$")
-			status = tonumber(status)
-			if not body then
-				body = stdout
-			end
+		post_kernel_json(self, "/api/kernel/focus_cell", payload, function(out, status, body)
 			on_done(out, status, body, payload_name)
 		end)
 	end
@@ -460,7 +467,6 @@ function M:focus_cell(cell_index)
 		end
 
 		-- Backward-compat fallback for servers that still expect snake_case.
-		-- TODO: check whether ths is necessary
 		if status == 400 or status == 422 then
 			post_focus({ cell_id = cell_id }, "cell_id", function(out2, status2, body2, payload_name2)
 				if out2.code == 0 and status2 and status2 < 400 then
@@ -490,41 +496,29 @@ function M:run_cell(cell_index, code)
 		return
 	end
 
-	local url = string.format("http://%s:%d/api/kernel/run", self.conn.host, self.conn.port)
-	if self.conn.token and self.conn.token ~= "" then
-		url = url .. "?access_token=" .. self.conn.token
-	end
-
-	vim.system({
-		"curl",
-		"-sf",
-		"-X",
-		"POST",
-		"-H",
-		"Content-Type: application/json",
-		"-H",
-		"Marimo-Session-Id: " .. self.session_id,
-		"-H",
-		"Marimo-Server-Token: " .. (self.conn.server_token or ""),
-		"-d",
-		vim.json.encode({
-			cellIds = { cell_id },
-			codes = { code },
-		}),
-		url,
-	}, { text = true }, function(out)
-		if out.code ~= 0 then
-			vim.schedule(function()
-				vim.notify(
-					string.format(
-						"[marimo] run_cell failed (code=%d): %s",
-						out.code,
-						vim.trim(out.stderr or out.stdout or "")
-					),
-					vim.log.levels.WARN
-				)
-			end)
+	post_kernel_json(self, "/api/kernel/run", {
+		cellIds = { cell_id },
+		codes = { code },
+	}, function(out, status, body)
+		if out.code == 0 and status and status < 400 then
+			return
 		end
+
+		vim.schedule(function()
+			local parts = { string.format("curl=%d", out.code) }
+			if status then
+				table.insert(parts, string.format("http=%d", status))
+			end
+			local stderr = vim.trim(out.stderr or "")
+			if stderr ~= "" then
+				table.insert(parts, stderr)
+			end
+			local response_body = vim.trim(body or "")
+			if response_body ~= "" then
+				table.insert(parts, response_body)
+			end
+			vim.notify("[marimo] run_cell failed: " .. table.concat(parts, " "), vim.log.levels.WARN)
+		end)
 	end)
 end
 
