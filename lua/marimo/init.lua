@@ -122,7 +122,7 @@ function M.start()
 
 	vim.notify("[marimo] starting marimo server …", vim.log.levels.INFO)
 
-	server.start(path, { open_browser = config.opts.open_browser }, function(conn, err)
+	server.start(path, function(conn, err)
 		vim.schedule(function()
 			if err then
 				vim.notify("[marimo] " .. err, vim.log.levels.ERROR)
