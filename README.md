@@ -99,6 +99,26 @@ require('marimo').setup({
 })
 ```
 
+You can override or disable the default buffer-local keymaps that the
+plugin installs for Python files:
+
+```lua
+-- Disable all default keymaps
+require('marimo').setup({ keys = false })
+
+-- Provide a custom set of buffer-local mappings (applied only for .py files)
+require('marimo').setup({
+  keys = {
+    { mode = 'n', lhs = '<localleader>s', cmd = 'MarimoRunCell', desc = 'Run cell' },
+    -- add or replace other mappings as needed
+  }
+})
+```
+
+The entries in `keys` are plain tables describing mappings. They are applied
+buffer-locally and only for Python buffers (filetype 'python' or files ending
+in `.py`).
+
 `:MarimoStart` opens the notebook in kiosk mode using a URL like
 `http://localhost:2718/?file=/path/to/notebook.py&kiosk=true`, so the browser
 can receive focus-sync notifications without taking over the main session.
