@@ -5,13 +5,14 @@
 --- Detection strategy (in order):
 ---   1. Use config.opts.port if explicitly set.
 ---   2. Scan /proc/<pid>/cmdline for processes running `marimo edit` and
----      extract the --port argument (Linux).  Falls back to `ss`/`lsof` on
----      macOS / systems without /proc.
----   3. Try the default marimo port (2718).
+---      extract the --port argument (Linux).
+---   3. Fall back to scanning listener tables via `ss`/`lsof`.
+---   4. Try the default marimo port (2718).
 
 local M = {}
 
 local config = require("marimo.config")
+local util = require("marimo.util")
 
 local DEFAULT_PORT = 2718
 local PID_FILE = vim.fn.stdpath("state") .. "/marimo.nvim.pid"
@@ -57,22 +58,39 @@ local function pid_is_alive(pid)
 	return pcall(vim.uv.kill, pid, 0)
 end
 
---- Best-effort validation that a pid still looks like a marimo edit process.
+--- Best-effort cmdline lookup for a pid.
 --- @param pid integer
---- @return boolean
-local function is_marimo_pid(pid)
+--- @return string|nil
+local function get_cmdline(pid)
 	if vim.fn.filereadable(string.format("/proc/%d/cmdline", pid)) == 0 then
-		return true
+		if vim.system then
+			local out = vim.system({ "ps", "-p", tostring(pid), "-o", "command=" }, { text = true }):wait()
+			if out.code ~= 0 then
+				return nil
+			end
+			return vim.trim(out.stdout or "")
+		end
+		return nil
 	end
 
 	local f = io.open(string.format("/proc/%d/cmdline", pid), "rb")
 	if not f then
-		return true
+		return nil
 	end
 
 	local raw = f:read("*a") or ""
 	f:close()
-	local cmdline = raw:gsub("%z", " ")
+	return raw:gsub("%z", " ")
+end
+
+--- Best-effort validation that a pid still looks like a marimo edit process.
+--- @param pid integer
+--- @return boolean
+local function is_marimo_pid(pid)
+	local cmdline = get_cmdline(pid)
+	if not cmdline or cmdline == "" then
+		return true
+	end
 	return cmdline:match("marimo") ~= nil and cmdline:match("edit") ~= nil
 end
 
@@ -98,15 +116,6 @@ local function stop_pid(pid)
 		end
 	end, 1500)
 	return true
-end
-
---- Percent-encode a string for safe use in a URI query parameter.
---- @param s string
---- @return string
-local function uri_encode(s)
-	return s:gsub("[^A-Za-z0-9%-._~]", function(c)
-		return string.format("%%%02X", c:byte())
-	end)
 end
 
 --- Generate a random token string suitable for use as --token-password.
@@ -206,6 +215,56 @@ local function detect_port_from_proc()
 	return nil
 end
 
+--- Scan `ss -ltnp` for a running marimo process and return its listening port.
+--- @return integer|nil
+local function detect_port_from_ss()
+	if vim.fn.executable("ss") ~= 1 or not vim.system then
+		return nil
+	end
+
+	local out = vim.system({ "ss", "-ltnp" }, { text = true }):wait()
+	if out.code ~= 0 then
+		return nil
+	end
+
+	for line in (out.stdout or ""):gmatch("[^\r\n]+") do
+		if line:match("marimo") then
+			local pid = line:match("pid=(%d+)")
+			local port = line:match(":(%d+)")
+			if pid and port and is_marimo_pid(tonumber(pid)) then
+				return tonumber(port)
+			end
+		end
+	end
+
+	return nil
+end
+
+--- Scan `lsof` listeners for a running marimo process and return its port.
+--- @return integer|nil
+local function detect_port_from_lsof()
+	if vim.fn.executable("lsof") ~= 1 or not vim.system then
+		return nil
+	end
+
+	local out = vim.system({ "lsof", "-nP", "-iTCP", "-sTCP:LISTEN" }, { text = true }):wait()
+	if out.code ~= 0 then
+		return nil
+	end
+
+	for line in (out.stdout or ""):gmatch("[^\r\n]+") do
+		if line:match("marimo") then
+			local pid = line:match("^%S+%s+(%d+)%s")
+			local port = line:match(":(%d+)%s*%(")
+			if pid and port and is_marimo_pid(tonumber(pid)) then
+				return tonumber(port)
+			end
+		end
+	end
+
+	return nil
+end
+
 --- Find the port of a running marimo server.
 --- @return integer port
 local function resolve_port()
@@ -216,6 +275,16 @@ local function resolve_port()
 	local proc_port = detect_port_from_proc()
 	if proc_port then
 		return proc_port
+	end
+
+	local ss_port = detect_port_from_ss()
+	if ss_port then
+		return ss_port
+	end
+
+	local lsof_port = detect_port_from_lsof()
+	if lsof_port then
+		return lsof_port
 	end
 
 	return DEFAULT_PORT
@@ -234,10 +303,10 @@ local function fetch_server_token(host, port, file_path, access_token)
 	local url = string.format("http://%s:%d/", host, port)
 	local params = {}
 	if file_path then
-		table.insert(params, "file=" .. uri_encode(file_path))
+		table.insert(params, "file=" .. util.uri_encode(file_path))
 	end
 	if access_token and access_token ~= "" then
-		table.insert(params, "access_token=" .. uri_encode(access_token))
+		table.insert(params, "access_token=" .. util.uri_encode(access_token))
 	end
 	if #params > 0 then
 		url = url .. "?" .. table.concat(params, "&")
@@ -285,11 +354,11 @@ end
 --- @return string
 function M.browser_url(conn, file_path)
 	local params = {
-		"file=" .. uri_encode(file_path),
+		"file=" .. util.uri_encode(file_path),
 		"kiosk=true",
 	}
 	if conn.token and conn.token ~= "" then
-		table.insert(params, "access_token=" .. uri_encode(conn.token))
+		table.insert(params, "access_token=" .. util.uri_encode(conn.token))
 	end
 
 	return string.format("http://%s:%d/?%s", browser_host(conn.host), conn.port, table.concat(params, "&"))
@@ -332,7 +401,7 @@ end
 --- @return boolean
 function M.is_running()
 	local host = config.opts.host or "127.0.0.1"
-	local port = resolve_port() or DEFAULT_PORT
+	local port = resolve_port()
 	local ok, _ = ping(host, port)
 	return ok
 end
@@ -344,9 +413,8 @@ end
 --- 500 ms for up to 20 s, then calls back with the connection or an error.
 ---
 --- @param file_path string   Absolute path to the notebook .py file.
---- @param opts      table    { open_browser: boolean }
 --- @param callback  fun(conn: table|nil, err: string|nil)
-function M.start(file_path, opts, callback)
+function M.start(file_path, callback)
 	if _proc then
 		callback(nil, "a marimo process is already managed by the plugin (call MarimoStop first)")
 		return
