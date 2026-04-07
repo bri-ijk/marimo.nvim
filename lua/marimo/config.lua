@@ -21,10 +21,17 @@ local DEFAULT_OPTS = {
 	server_token = nil,
 	-- Whether to open the browser automatically when starting the marimo server.
 	open_browser = true,
+	-- Automatically run markdown-targeted cells once after attach/start.
+	autorun_markdown_on_attach = true,
+	-- Map Enter in Python buffers: normal runs current cell, visual runs selection.
+	enter_to_run = true,
 	-- Buffer-local keymaps for Python files. Set to false to disable.
 	keys = {
 		{ mode = "n", lhs = "<localleader>s", cmd = "MarimoRunCell", desc = "Run marimo cell under cursor" },
 		{ mode = "n", lhs = "<localleader>S", cmd = "MarimoRunAll", desc = "Run all marimo cells in buffer" },
+		{ mode = "v", lhs = "<localleader>v", cmd = "'<,'>MarimoRunVisual", desc = "Run marimo cells in selection" },
+		{ mode = "n", lhs = "<localleader>m", cmd = "MarimoRunMd", desc = "Run markdown-targeted cells" },
+		{ mode = "n", lhs = "<localleader>j", cmd = "MarimoJumpToCell", desc = "Jump to marimo cell index" },
 		{ mode = "n", lhs = "<localleader>rf", cmd = "MarimoStart", desc = "Start marimo and attach" },
 		{ mode = "n", lhs = "<localleader>rq", cmd = "MarimoStop", desc = "Stop managed marimo server" },
 		{ mode = "n", lhs = "<localleader>ra", cmd = "MarimoAttach", desc = "Attach buffer to marimo" },

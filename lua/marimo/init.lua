@@ -26,6 +26,46 @@ local parser = require("marimo.parser")
 --- @type table<integer, table>
 local _sessions = {}
 
+--- Return true when extracted cell code looks like a markdown-rendering cell.
+--- @param code string|nil
+--- @return boolean
+local function is_markdown_cell(code)
+	if not code or code == "" then
+		return false
+	end
+	return code:match("%f[%w_]mo%.md%s*%(") ~= nil or code:match("%f[%w_]md%s*%(") ~= nil
+end
+
+--- Run markdown-targeted cells for a buffer/session pair.
+--- @param bufnr integer
+--- @param session table
+--- @param silent boolean|nil
+--- @return integer ran_count
+local function run_markdown_cells_for_buffer(bufnr, session, silent)
+	local ran_count = 0
+	-- Make sure to run the marimo `import marimo as md` cell first if it exists, so that subsequent markdown cells can find the `md` alias.
+	-- TODO: test
+	-- (this is hacky as it relies on the import cell being first, but marimo itself doesn't currently guarantee any particular cell order)
+	session:run_cell(0, parser.cell_code_at_index(bufnr, 0))
+	for i = 0, (#session.cell_ids - 1) do
+		local code = parser.cell_code_at_index(bufnr, i)
+		if code and is_markdown_cell(code) then
+			session:run_cell(i, code)
+			ran_count = ran_count + 1
+		end
+	end
+
+	if not silent then
+		if ran_count == 0 then
+			vim.notify("[marimo] no markdown-targeted cells found", vim.log.levels.INFO)
+		else
+			vim.notify(string.format("[marimo] ran %d markdown-targeted cells", ran_count), vim.log.levels.INFO)
+		end
+	end
+
+	return ran_count
+end
+
 -- Setup
 
 --- Configure the plugin.  Call once in your Neovim config before using any
@@ -51,11 +91,19 @@ local function attach_with_conn(bufnr, path, conn)
 	end
 
 	local session = Session.new(conn, path)
+	local did_initial_ready = false
 	local ws_err = session:connect(function(cell_ids)
 		vim.notify(
 			string.format("[marimo] ready — %d cells loaded (%s:%d)", #cell_ids, conn.host, conn.port),
 			vim.log.levels.INFO
 		)
+
+		if not did_initial_ready then
+			did_initial_ready = true
+			if config.opts.autorun_markdown_on_attach then
+				run_markdown_cells_for_buffer(bufnr, session, true)
+			end
+		end
 	end)
 
 	if ws_err then
@@ -253,6 +301,104 @@ function M.run_all_cells()
 			session:run_cell(i, cell_code)
 		end
 	end
+end
+
+--- Run every cell that overlaps the visual selection range.
+--- @param line_start integer|nil
+--- @param line_end integer|nil
+function M.run_visual(line_start, line_end)
+	local bufnr = vim.api.nvim_get_current_buf()
+	local session = _sessions[bufnr]
+
+	if not session then
+		vim.notify("[marimo] not attached (run :MarimoAttach)", vim.log.levels.WARN)
+		return
+	end
+	if not session.ready then
+		vim.notify("[marimo] session is not ready yet", vim.log.levels.WARN)
+		return
+	end
+
+	local first = line_start or vim.fn.line("'<")
+	local last = line_end or vim.fn.line("'>")
+	if first <= 0 or last <= 0 then
+		vim.notify("[marimo] no visual selection range found", vim.log.levels.WARN)
+		return
+	end
+	if first > last then
+		first, last = last, first
+	end
+
+	local ranges = parser.get_cell_ranges(bufnr)
+	local ran_count = 0
+
+	for i, range in ipairs(ranges) do
+		if range.finish >= first and range.start <= last then
+			local idx = i - 1
+			local code = parser.cell_code_at_index(bufnr, idx)
+			if code then
+				session:run_cell(idx, code)
+				ran_count = ran_count + 1
+			end
+		end
+	end
+
+	if ran_count == 0 then
+		vim.notify("[marimo] no marimo cells intersect visual selection", vim.log.levels.WARN)
+		return
+	end
+
+	vim.notify(string.format("[marimo] ran %d cells from visual selection", ran_count), vim.log.levels.INFO)
+end
+
+--- Run all markdown-targeted cells in the current buffer.
+function M.run_markdown_cells()
+	local bufnr = vim.api.nvim_get_current_buf()
+	local session = _sessions[bufnr]
+
+	if not session then
+		vim.notify("[marimo] not attached (run :MarimoAttach)", vim.log.levels.WARN)
+		return
+	end
+	if not session.ready then
+		vim.notify("[marimo] session is not ready yet", vim.log.levels.WARN)
+		return
+	end
+
+	run_markdown_cells_for_buffer(bufnr, session, false)
+end
+
+--- Jump cursor to the start line of a 0-based marimo cell index.
+--- @param cell_index integer
+function M.jump_to_cell(cell_index)
+	local bufnr = vim.api.nvim_get_current_buf()
+	local idx = tonumber(cell_index)
+	if not idx then
+		vim.notify("[marimo] invalid cell index", vim.log.levels.WARN)
+		return
+	end
+
+	idx = math.floor(idx)
+	if idx < 0 then
+		vim.notify("[marimo] cell index must be >= 0", vim.log.levels.WARN)
+		return
+	end
+
+	local ranges = parser.get_cell_ranges(bufnr)
+	if #ranges == 0 then
+		vim.notify("[marimo] no marimo cells found in current buffer", vim.log.levels.WARN)
+		return
+	end
+
+	local target = ranges[idx + 1]
+	if not target then
+		vim.notify(string.format("[marimo] cell index out of range (0..%d)", #ranges - 1), vim.log.levels.WARN)
+		return
+	end
+
+	vim.api.nvim_win_set_cursor(0, { target.start, 0 })
+	vim.cmd("normal! zvzz")
+	vim.notify(string.format("[marimo] jumped to cell %d", idx), vim.log.levels.INFO)
 end
 
 --- Return the active session for a buffer (nil if not attached).

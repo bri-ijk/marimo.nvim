@@ -58,6 +58,47 @@ local function pid_is_alive(pid)
 	return pcall(vim.uv.kill, pid, 0)
 end
 
+--- Best-effort process tree walk (Linux /proc).
+--- Returns all descendants (children, grandchildren, ...) of root pid.
+--- @param root_pid integer
+--- @return integer[]
+local function collect_descendants(root_pid)
+	if vim.fn.isdirectory("/proc") == 0 then
+		return {}
+	end
+
+	local children_by_parent = {}
+	local status_files = vim.fn.glob("/proc/*/status", false, true)
+	for _, path in ipairs(status_files) do
+		local f = io.open(path, "r")
+		if f then
+			local text = f:read("*a") or ""
+			f:close()
+			local pid = tonumber(text:match("\nPid:%s*(%d+)")) or tonumber(text:match("^Pid:%s*(%d+)"))
+			local ppid = tonumber(text:match("\nPPid:%s*(%d+)")) or tonumber(text:match("^PPid:%s*(%d+)"))
+			if pid and ppid then
+				children_by_parent[ppid] = children_by_parent[ppid] or {}
+				table.insert(children_by_parent[ppid], pid)
+			end
+		end
+	end
+
+	local out = {}
+	local queue = { root_pid }
+	local head = 1
+	while head <= #queue do
+		local parent = queue[head]
+		head = head + 1
+		local kids = children_by_parent[parent] or {}
+		for _, child in ipairs(kids) do
+			table.insert(out, child)
+			table.insert(queue, child)
+		end
+	end
+
+	return out
+end
+
 --- Best-effort cmdline lookup for a pid.
 --- @param pid integer
 --- @return string|nil
@@ -94,7 +135,9 @@ local function is_marimo_pid(pid)
 	return cmdline:match("marimo") ~= nil and cmdline:match("edit") ~= nil
 end
 
---- Send termination signals to a managed marimo pid.
+--- Send termination signals to a managed marimo process.
+--- Attempts to terminate the process group first (for kernels/workers), then
+--- falls back to the main pid.
 --- @param pid integer
 --- @return boolean
 local function stop_pid(pid)
@@ -106,9 +149,24 @@ local function stop_pid(pid)
 		return false
 	end
 
+	local descendants = collect_descendants(pid)
+
+	for _, child_pid in ipairs(descendants) do
+		pcall(vim.uv.kill, child_pid, "sigterm")
+	end
+
+	-- If marimo was started as a detached process group leader, signaling -pid
+	-- reaches kernel/worker descendants too.
+	pcall(vim.uv.kill, -pid, "sigterm")
 	pcall(vim.uv.kill, pid, "sigterm")
 	vim.defer_fn(function()
+		for _, child_pid in ipairs(descendants) do
+			if pid_is_alive(child_pid) then
+				pcall(vim.uv.kill, child_pid, "sigkill")
+			end
+		end
 		if pid_is_alive(pid) then
+			pcall(vim.uv.kill, -pid, "sigkill")
 			pcall(vim.uv.kill, pid, "sigkill")
 		end
 		if not pid_is_alive(pid) then
@@ -459,7 +517,7 @@ function M.start(file_path, callback)
 	local stderr_pipe = assert(vim.uv.new_pipe())
 	handle = vim.uv.spawn(marimo_bin, {
 		args = args,
-		detached = false,
+		detached = true,
 		stdio = { nil, nil, stderr_pipe },
 	}, function(code, _signal)
 		exited = true
@@ -567,6 +625,7 @@ function M.stop()
 	end
 
 	if _proc and not _proc:is_closing() then
+		pcall(_proc.kill, _proc, "sigterm")
 		_proc:close()
 	end
 	_proc = nil

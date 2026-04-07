@@ -11,7 +11,8 @@ no terminal required.
 - Connects as a background kiosk client so the browser session is never
   interrupted
 - Per-buffer: attach and detach independently for multiple open notebooks
-- Run a single cell (`:MarimoRunCell`) or all cells (`:MarimoRunAll`)
+- Run a single cell (`:MarimoRunCell`), all cells (`:MarimoRunAll`), visual
+  selection cells (`:MarimoRunVisual`), or markdown-targeted cells (`:MarimoRunMd`)
 - Toggle cursor-follow on/off with `:MarimoToggleFollow`
 - Browser scroll-to-cell on cursor movement is supported on current marimo
   stable releases via `POST /api/kernel/focus_cell`
@@ -66,8 +67,25 @@ To connect to a server you already started manually:
 | `:MarimoDetach` | Disconnect the current buffer |
 | `:MarimoRunCell` | Run the marimo cell under the cursor |
 | `:MarimoRunAll` | Run all marimo cells in the current buffer |
+| `:MarimoRunVisual` | Run marimo cells that intersect a visual line range |
+| `:MarimoRunMd` | Run markdown-targeted marimo cells in the current buffer |
 | `:MarimoToggleFollow` | Toggle automatic browser scroll on cursor movement |
 | `:MarimoStatus` | Show connection status for the current buffer |
+
+### Running selections & markdown cells
+
+Two new convenience commands let you run subsets of cells without running the
+entire notebook:
+
+- `:MarimoRunVisual` — runs all marimo cells that intersect the current visual
+  selection (or a supplied line range). Useful when you want to execute just a
+  few adjacent cells. Mapped by default to `<localleader>sv` (visual mode).
+- `:MarimoRunMd` — runs marimo cells that are targeted at generating Markdown
+  output. This looks for common markdown-rendering helper calls (eg. `mo.md(`
+  or `md(`) in the extracted cell body and runs those cells. Mapped by default
+  to `<localleader>sm`.
+
+Both commands are buffer-local and only active for Python buffers.
 
 ## Configuration
 
@@ -94,6 +112,9 @@ require('marimo').setup({
   -- Automatically scroll the browser when the cursor moves to a new cell.
   follow_cursor = true,
 
+  -- Automatically run markdown-targeted cells once after attach/start.
+  autorun_markdown_on_attach = true,
+
   -- Path to the websocat binary. nil = use 'websocat' from PATH.
   websocat_bin = nil,
 })
@@ -110,6 +131,8 @@ require('marimo').setup({ keys = false })
 require('marimo').setup({
   keys = {
     { mode = 'n', lhs = '<localleader>s', cmd = 'MarimoRunCell', desc = 'Run cell' },
+    { mode = 'v', lhs = '<localleader>sv', cmd = "'<,'>MarimoRunVisual", desc = 'Run visual range' },
+    { mode = 'n', lhs = '<localleader>sm', cmd = 'MarimoRunMd', desc = 'Run markdown cells' },
     -- add or replace other mappings as needed
   }
 })

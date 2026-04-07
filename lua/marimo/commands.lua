@@ -8,6 +8,9 @@
 ---   :MarimoDetach          Disconnect current buffer
 ---   :MarimoRunCell         Run the cell under the cursor
 ---   :MarimoRunAll          Run all cells in the current buffer
+---   :MarimoRunVisual       Run marimo cells intersecting a visual range
+---   :MarimoRunMd           Run markdown-targeted cells in the buffer
+---   :MarimoJumpToCell      Jump to a specific 0-based marimo cell index
 ---   :MarimoToggleFollow    Toggle automatic cursor-follow (follow_cursor option)
 ---   :MarimoStatus          Print connection status for the current buffer
 
@@ -39,6 +42,24 @@ local function create_commands()
 	vim.api.nvim_create_user_command("MarimoRunAll", function()
 		marimo.run_all_cells()
 	end, { desc = "Run all marimo cells in the current buffer" })
+
+	vim.api.nvim_create_user_command("MarimoRunVisual", function(opts)
+		marimo.run_visual(opts.line1, opts.line2)
+	end, {
+		range = true,
+		desc = "Run marimo cells that intersect the selected line range",
+	})
+
+	vim.api.nvim_create_user_command("MarimoRunMd", function()
+		marimo.run_markdown_cells()
+	end, { desc = "Run markdown-targeted marimo cells in the current buffer" })
+
+	vim.api.nvim_create_user_command("MarimoJumpToCell", function(opts)
+		marimo.jump_to_cell(opts.args)
+	end, {
+		nargs = 1,
+		desc = "Jump to marimo cell by 0-based index",
+	})
 
 	vim.api.nvim_create_user_command("MarimoToggleFollow", function()
 		marimo.toggle_follow()
