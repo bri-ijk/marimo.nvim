@@ -69,6 +69,7 @@ To connect to a server you already started manually:
 | `:MarimoRunAll` | Run all marimo cells in the current buffer |
 | `:MarimoRunVisual` | Run marimo cells that intersect a visual line range |
 | `:MarimoRunMd` | Run markdown-targeted marimo cells in the current buffer |
+| `:MarimoJumpToCell <index>` | Jump cursor to a specific 0-based marimo cell index |
 | `:MarimoToggleFollow` | Toggle automatic browser scroll on cursor movement |
 | `:MarimoStatus` | Show connection status for the current buffer |
 
@@ -86,6 +87,14 @@ entire notebook:
   to `<localleader>sm`.
 
 Both commands are buffer-local and only active for Python buffers.
+
+When marimo reports an error with a cell index, you can jump straight to it:
+
+```vim
+:MarimoJumpToCell 12
+```
+
+`MarimoJumpToCell` uses 0-based indexing to match marimo error output.
 
 ## Configuration
 
@@ -115,6 +124,10 @@ require('marimo').setup({
   -- Automatically run markdown-targeted cells once after attach/start.
   autorun_markdown_on_attach = true,
 
+  -- Optional: map Enter in Python buffers.
+  -- normal mode: run current cell, visual mode: run selected cells.
+  enter_to_run = false,
+
   -- Path to the websocat binary. nil = use 'websocat' from PATH.
   websocat_bin = nil,
 })
@@ -141,6 +154,14 @@ require('marimo').setup({
 The entries in `keys` are plain tables describing mappings. They are applied
 buffer-locally and only for Python buffers (filetype 'python' or files ending
 in `.py`).
+
+If you want Enter to execute cells (like REPL-style workflows), enable:
+
+```lua
+require('marimo').setup({
+  enter_to_run = true,
+})
+```
 
 `:MarimoStart` opens the notebook in kiosk mode using a URL like
 `http://localhost:2718/?file=/path/to/notebook.py&kiosk=true`, so the browser
