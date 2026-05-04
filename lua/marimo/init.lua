@@ -241,6 +241,7 @@ function M.status()
 		string.format("  session_id  : %s", session.session_id),
 		string.format("  ready       : %s", tostring(session.ready)),
 		string.format("  cells       : %d", #session.cell_ids),
+		string.format("  setup cell  : %s", tostring(parser.has_setup_cell(bufnr))),
 		string.format("  follow      : %s", tostring(config.opts.follow_cursor)),
 		string.format("  notebook    : %s", session.notebook_path),
 	}

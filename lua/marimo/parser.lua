@@ -67,12 +67,15 @@ local function strip_generated_return(lines)
 	return body
 end
 
--- Pattern that matches the start of any marimo cell-like block.
+--- Pattern that matches a marimo setup block.
+local SETUP_PATTERN = "^with%s+app%.setup%s*(%b())?%s*:"
+
+--- Pattern that matches the start of any marimo cell-like block.
 local CELL_PATTERNS = {
 	"^@app%.cell",
 	"^@app%.function",
 	"^@app%.class_definition",
-	"^with%s+app%.setup%s*:",
+	SETUP_PATTERN,
 }
 
 --- Returns true if `line` (1-indexed string content) is a cell delimiter.
@@ -175,7 +178,7 @@ function M.cell_code_at_index(bufnr, cell_index)
 		return nil
 	end
 
-	if lines[1]:match("^with%s+app%.setup%s*:") then
+	if lines[1]:match(SETUP_PATTERN) then
 		local body = {}
 		for i = 2, #lines do
 			body[#body + 1] = lines[i]
@@ -204,6 +207,29 @@ function M.cell_code_at_index(bufnr, cell_index)
 	body = deindent_cell_body(body)
 
 	return table.concat(body, "\n")
+end
+
+--- Return true if the buffer contains a `with app.setup:` block.
+--- @param bufnr integer
+--- @return boolean
+function M.has_setup_cell(bufnr)
+	bufnr = bufnr == 0 and vim.api.nvim_get_current_buf() or bufnr
+	local tick = vim.api.nvim_buf_get_changedtick(bufnr)
+	local cached = _cache[bufnr]
+	local lines
+	if cached and cached.tick == tick then
+		lines = cached.lines
+	else
+		lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+	end
+
+	for _, line in ipairs(lines) do
+		if line:match(SETUP_PATTERN) then
+			return true
+		end
+	end
+
+	return false
 end
 
 return M
