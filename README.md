@@ -124,6 +124,9 @@ require('marimo').setup({
   -- Automatically run markdown-targeted cells once after attach/start.
   autorun_markdown_on_attach = true,
 
+  -- Allow @app.function and @app.class_definition cells to execute.
+  run_definition_cells = false,
+
   -- Optional: map Enter in Python buffers.
   -- normal mode: run current cell, visual mode: run selected cells.
   enter_to_run = false,

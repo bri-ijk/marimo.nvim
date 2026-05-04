@@ -23,6 +23,8 @@ local DEFAULT_OPTS = {
 	open_browser = true,
 	-- Automatically run markdown-targeted cells once after attach/start.
 	autorun_markdown_on_attach = true,
+	-- Allow @app.function and @app.class_definition cells to execute.
+	run_definition_cells = false,
 	-- Map Enter in Python buffers: normal runs current cell, visual runs selection.
 	enter_to_run = true,
 	-- Buffer-local keymaps for Python files. Set to false to disable.

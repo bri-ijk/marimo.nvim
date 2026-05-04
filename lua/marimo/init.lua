@@ -43,16 +43,31 @@ end
 --- @return integer ran_count
 local function run_markdown_cells_for_buffer(bufnr, session, silent)
 	local ran_count = 0
+	local kinds = parser.get_cell_kinds(bufnr)
+	local function should_run_kind(kind)
+		return config.opts.run_definition_cells or (kind ~= "function" and kind ~= "class_definition")
+	end
 	-- Make sure to run the marimo `import marimo as md` cell first if it exists, so that subsequent markdown cells can find the `md` alias.
 	-- TODO: test
 	-- (this is hacky as it relies on the import cell being first, but marimo itself doesn't currently guarantee any particular cell order)
-	session:run_cell(0, parser.cell_code_at_index(bufnr, 0))
+	local first_kind = kinds[1]
+	if should_run_kind(first_kind) then
+		local first_code = parser.cell_code_at_index(bufnr, 0)
+		if first_code then
+			session:run_cell(0, first_code)
+		end
+	end
 	for i = 0, (#session.cell_ids - 1) do
+		local kind = kinds[i + 1]
+		if not should_run_kind(kind) then
+			goto continue
+		end
 		local code = parser.cell_code_at_index(bufnr, i)
 		if code and is_markdown_cell(code) then
 			session:run_cell(i, code)
 			ran_count = ran_count + 1
 		end
+		::continue::
 	end
 
 	if not silent then
@@ -242,6 +257,7 @@ function M.status()
 		string.format("  ready       : %s", tostring(session.ready)),
 		string.format("  cells       : %d", #session.cell_ids),
 		string.format("  setup cell  : %s", tostring(parser.has_setup_cell(bufnr))),
+		string.format("  run defs    : %s", tostring(config.opts.run_definition_cells)),
 		string.format("  follow      : %s", tostring(config.opts.follow_cursor)),
 		string.format("  notebook    : %s", session.notebook_path),
 	}
@@ -269,6 +285,16 @@ function M.run_cell()
 		return
 	end
 
+	local kinds = parser.get_cell_kinds(bufnr)
+	local kind = kinds[idx + 1]
+	if not config.opts.run_definition_cells and (kind == "function" or kind == "class_definition") then
+		vim.notify(
+			"[marimo] definition cell skipped (set run_definition_cells=true to execute)",
+			vim.log.levels.WARN
+		)
+		return
+	end
+
 	local code = parser.cell_code_at_index(bufnr, idx)
 	if code == nil then
 		vim.notify("[marimo] could not extract cell code from buffer", vim.log.levels.WARN)
@@ -292,7 +318,12 @@ function M.run_all_cells()
 		return
 	end
 
+	local kinds = parser.get_cell_kinds(bufnr)
 	for i = 0, (#session.cell_ids - 1) do
+		local kind = kinds[i + 1]
+		if not config.opts.run_definition_cells and (kind == "function" or kind == "class_definition") then
+			goto continue
+		end
 		local cell_code = parser.cell_code_at_index(bufnr, i)
 		if cell_code == nil then
 			vim.notify("[marimo] could not extract cell code from buffer", vim.log.levels.WARN)
@@ -301,6 +332,7 @@ function M.run_all_cells()
 		if cell_code then
 			session:run_cell(i, cell_code)
 		end
+		::continue::
 	end
 end
 
@@ -331,17 +363,23 @@ function M.run_visual(line_start, line_end)
 	end
 
 	local ranges = parser.get_cell_ranges(bufnr)
+	local kinds = parser.get_cell_kinds(bufnr)
 	local ran_count = 0
 
 	for i, range in ipairs(ranges) do
 		if range.finish >= first and range.start <= last then
 			local idx = i - 1
+			local kind = kinds[i]
+			if not config.opts.run_definition_cells and (kind == "function" or kind == "class_definition") then
+				goto continue
+			end
 			local code = parser.cell_code_at_index(bufnr, idx)
 			if code then
 				session:run_cell(idx, code)
 				ran_count = ran_count + 1
 			end
 		end
+		::continue::
 	end
 
 	if ran_count == 0 then
