@@ -68,21 +68,60 @@ local function strip_generated_return(lines)
 end
 
 --- Pattern that matches a marimo setup block.
-local SETUP_PATTERN = "^with%s+app%.setup%s*(%b())?%s*:"
+local SETUP_PATTERN = "^%s*with%s+app%.setup%s*(%b())?%s*:"
+local CELL_PATTERN = "^%s*@app%.cell"
+local FUNCTION_PATTERN = "^%s*@app%.function"
+local CLASS_PATTERN = "^%s*@app%.class_definition"
 
---- Pattern that matches the start of any marimo cell-like block.
-local CELL_PATTERNS = {
-	"^@app%.cell",
-	"^@app%.function",
-	"^@app%.class_definition",
-	SETUP_PATTERN,
+local DECORATOR_PATTERNS = {
+	CELL_PATTERN,
+	FUNCTION_PATTERN,
+	CLASS_PATTERN,
 }
+
+--- Return true if a line is a marimo setup block.
+--- @param line string
+--- @return boolean
+local function is_setup_line(line)
+	if line:match(SETUP_PATTERN) then
+		return true
+	end
+	local stripped = line:gsub("^%s+", "")
+	if stripped:match("^with%s+app%s*%.%s*setup%f[%W]") then
+		return stripped:match(":") ~= nil
+	end
+	local compact = line:gsub("%s+", "")
+	return compact:match("^withapp%.setup") ~= nil
+end
+
+--- Return the delimiter kind for a line, or nil if not a delimiter.
+--- @param line string
+--- @return string|nil
+
+local function delimiter_kind(line)
+	if line:match(CELL_PATTERN) then
+		return "cell"
+	end
+	if line:match(FUNCTION_PATTERN) then
+		return "function"
+	end
+	if line:match(CLASS_PATTERN) then
+		return "class_definition"
+	end
+	if is_setup_line(line) then
+		return "setup"
+	end
+	return nil
+end
 
 --- Returns true if `line` (1-indexed string content) is a cell delimiter.
 --- @param line string
 --- @return boolean
 local function is_delimiter(line)
-	for _, pat in ipairs(CELL_PATTERNS) do
+	if is_setup_line(line) then
+		return true
+	end
+	for _, pat in ipairs(DECORATOR_PATTERNS) do
 		if line:match(pat) then
 			return true
 		end
@@ -121,6 +160,33 @@ function M.get_cell_ranges(bufnr)
 	-- If no delimiters found the file is not a valid marimo notebook.
 	_cache[bufnr] = { tick = tick, lines = lines, ranges = ranges }
 	return ranges
+end
+
+--- Return a list of cell kinds aligned with get_cell_ranges.
+--- Values: "cell", "function", "class_definition", "setup".
+--- @param bufnr integer
+--- @return string[]
+function M.get_cell_kinds(bufnr)
+	bufnr = bufnr == 0 and vim.api.nvim_get_current_buf() or bufnr
+	local tick = vim.api.nvim_buf_get_changedtick(bufnr)
+	local cached = _cache[bufnr]
+	local lines
+	local ranges
+	if cached and cached.tick == tick then
+		lines = cached.lines
+		ranges = cached.ranges
+	else
+		lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+		ranges = M.get_cell_ranges(bufnr)
+	end
+
+	local kinds = {}
+	for i, range in ipairs(ranges) do
+		local line = lines[range.start] or ""
+		kinds[i] = delimiter_kind(line) or "cell"
+	end
+
+	return kinds
 end
 
 --- Given a 1-based cursor line, return the 0-based cell index the cursor is
@@ -178,7 +244,7 @@ function M.cell_code_at_index(bufnr, cell_index)
 		return nil
 	end
 
-	if lines[1]:match(SETUP_PATTERN) then
+	if is_setup_line(lines[1]) then
 		local body = {}
 		for i = 2, #lines do
 			body[#body + 1] = lines[i]
@@ -224,7 +290,7 @@ function M.has_setup_cell(bufnr)
 	end
 
 	for _, line in ipairs(lines) do
-		if line:match(SETUP_PATTERN) then
+		if is_setup_line(line) then
 			return true
 		end
 	end
