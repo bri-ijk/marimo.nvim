@@ -222,10 +222,11 @@ end
 --- Uses GET /api/version — unauthenticated, always 200 when the server is up.
 --- @param host string
 --- @param port integer
+--- @param token string
 --- @return boolean ok
 --- @return string|nil err
-local function ping(host, port)
-	local url = string.format("http://%s:%d/api/version", host, port)
+local function ping(host, port, token)
+	local url = string.format("http://%s:%d/api/version?%s", host, port, token)
 	local ok
 	if vim.system then
 		local out = vim.system({ "curl", "-sf", "--max-time", "2", url }):wait()
@@ -396,13 +397,11 @@ function M.connect(notebook_path)
 	local host = config.opts.host or "127.0.0.1"
 	local port = resolve_port()
 
-	local ok, err = ping(host, port)
+	local server_token = config.opts.server_token or fetch_server_token(host, port, notebook_path)
+	local ok, err = ping(host, port, server_token)
 	if not ok then
 		return nil, err
 	end
-
-	local server_token = config.opts.server_token or fetch_server_token(host, port, notebook_path)
-
 	return { host = host, port = port, token = "", server_token = server_token }, nil
 end
 
@@ -460,7 +459,8 @@ end
 function M.is_running()
 	local host = config.opts.host or "127.0.0.1"
 	local port = resolve_port()
-	local ok, _ = ping(host, port)
+	local token = fetch_server_token(host, port, nil, nil)
+	local ok, _ = ping(host, port, token)
 	return ok
 end
 
@@ -592,7 +592,7 @@ function M.start(file_path, callback)
 			end
 			return
 		end
-		local ok, _ = ping(host, port)
+		local ok, _ = ping(host, port, token)
 		if ok then
 			local server_token = fetch_server_token(host, port, file_path, token)
 			finish({ host = host, port = port, token = token, server_token = server_token }, nil)
