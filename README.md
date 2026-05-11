@@ -35,7 +35,7 @@ brew install websocat           # macOS Homebrew
 
 ```lua
 {
-  'brian2001dineen-afk/marimo.nvim',
+  'bri-ijk/marimo.nvim',
   opts = {},
 }
 ```
@@ -59,19 +59,19 @@ To connect to a server you already started manually:
 
 ### Commands
 
-| Command | Description |
-|---|---|
-| `:MarimoStart` | Start `marimo edit` for the current file and connect |
-| `:MarimoStop` | Stop the managed server and disconnect |
-| `:MarimoAttach` | Connect to an already-running Marimo server |
-| `:MarimoDetach` | Disconnect the current buffer |
-| `:MarimoRunCell` | Run the marimo cell under the cursor |
-| `:MarimoRunAll` | Run all marimo cells in the current buffer |
-| `:MarimoRunVisual` | Run marimo cells that intersect a visual line range |
-| `:MarimoRunMd` | Run markdown-targeted marimo cells in the current buffer |
-| `:MarimoJumpToCell <index>` | Jump cursor to a specific 0-based marimo cell index |
-| `:MarimoToggleFollow` | Toggle automatic browser scroll on cursor movement |
-| `:MarimoStatus` | Show connection status for the current buffer |
+| Command                     | Description                                              |
+| --------------------------- | -------------------------------------------------------- |
+| `:MarimoStart`              | Start `marimo edit` for the current file and connect     |
+| `:MarimoStop`               | Stop the managed server and disconnect                   |
+| `:MarimoAttach`             | Connect to an already-running Marimo server              |
+| `:MarimoDetach`             | Disconnect the current buffer                            |
+| `:MarimoRunCell`            | Run the marimo cell under the cursor                     |
+| `:MarimoRunAll`             | Run all marimo cells in the current buffer               |
+| `:MarimoRunVisual`          | Run marimo cells that intersect a visual line range      |
+| `:MarimoRunMd`              | Run markdown-targeted marimo cells in the current buffer |
+| `:MarimoJumpToCell <index>` | Jump cursor to a specific 0-based marimo cell index      |
+| `:MarimoToggleFollow`       | Toggle automatic browser scroll on cursor movement       |
+| `:MarimoStatus`             | Show connection status for the current buffer            |
 
 ### Running selections & markdown cells
 
@@ -103,13 +103,15 @@ require('marimo').setup({
   -- Automatically open the browser when :MarimoStart is called.
   open_browser = true,
 
-  -- Explicit marimo executable for :MarimoStart.
-  -- Leave nil to use `marimo` from PATH.
-  marimo_bin = nil,
+  -- Automatically scroll the browser when the cursor moves to a new cell.
+  follow_cursor = true,
 
-  -- Temporary local marimo checkout for :MarimoStart.
-  -- Runs: uv run --project <dir> marimo ...
-  marimo_project = nil,
+  -- Automatically run markdown-targeted cells once after attach/start.
+  autorun_markdown_on_attach = true,
+
+  -- Optional: map Enter in Python buffers.
+  -- normal mode: run current cell, visual mode: run selected cells.
+  enter_to_run = false,
 
   -- Port for the managed server (:MarimoStart).
   -- nil = default Marimo port (2718).
@@ -118,21 +120,24 @@ require('marimo').setup({
   -- Host Marimo is running on.
   host = '127.0.0.1',
 
-  -- Automatically scroll the browser when the cursor moves to a new cell.
-  follow_cursor = true,
+	-- Access token for auth-protected marimo servers (used in URL query params).
+	access_token = nil,
 
-  -- Automatically run markdown-targeted cells once after attach/start.
-  autorun_markdown_on_attach = true,
+  --- The following options are for advanced use and local development. You can ignore them
+
+  -- Explicit marimo executable for :MarimoStart.
+  -- Leave nil to use `marimo` from PATH.
+  marimo_bin = nil,
 
   -- Allow @app.function and @app.class_definition cells to execute.
   run_definition_cells = false,
 
-  -- Optional: map Enter in Python buffers.
-  -- normal mode: run current cell, visual mode: run selected cells.
-  enter_to_run = false,
-
   -- Path to the websocat binary. nil = use 'websocat' from PATH.
   websocat_bin = nil,
+
+  -- Temporary local marimo checkout for :MarimoStart.
+  -- Runs: uv run --project <dir> marimo ...
+  marimo_project = nil,
 })
 ```
 
