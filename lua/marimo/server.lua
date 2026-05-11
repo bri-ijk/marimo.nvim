@@ -402,13 +402,16 @@ end
 function M.connect(notebook_path)
 	local host = config.opts.host or "127.0.0.1"
 	local port = resolve_port()
-
-	local server_token = config.opts.server_token or fetch_server_token(host, port, notebook_path)
-	local ok, err = ping(host, port, server_token)
+	local access_token = config.opts.access_token
+	local server_token = config.opts.server_token or ""
+	local ok, err = ping(host, port, access_token)
 	if not ok then
 		return nil, err
 	end
-	return { host = host, port = port, token = "", server_token = server_token }, nil
+	if server_token == "" then
+		server_token = fetch_server_token(host, port, notebook_path, access_token)
+	end
+	return { host = host, port = port, token = access_token or "", server_token = server_token }, nil
 end
 
 --- Build the browser URL for a notebook in kiosk mode.
