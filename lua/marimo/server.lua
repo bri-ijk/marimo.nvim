@@ -459,8 +459,7 @@ end
 function M.is_running()
 	local host = config.opts.host or "127.0.0.1"
 	local port = resolve_port()
-	local token = fetch_server_token(host, port, nil, nil)
-	local ok, _ = ping(host, port, token)
+	local ok, _ = ping(host, port, nil)
 	return ok
 end
 
