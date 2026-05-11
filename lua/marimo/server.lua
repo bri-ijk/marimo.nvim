@@ -226,7 +226,13 @@ end
 --- @return boolean ok
 --- @return string|nil err
 local function ping(host, port, access_token)
-	local url = string.format("http://%s:%d/api/version?access_token=%s", host, port, access_token)
+	local url
+	if access_token ~= nil and access_token ~= "" then
+		access_token = util.uri_encode(access_token)
+		url = string.format("http://%s:%d/api/version?access_token=%s", host, port, access_token)
+	else
+		url = string.format("http://%s:%d/api/version", host, port)
+	end
 	local ok
 	if vim.system then
 		local out = vim.system({ "curl", "-sf", "--max-time", "2", url }):wait()
