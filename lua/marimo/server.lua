@@ -219,14 +219,14 @@ local function browser_host(host)
 end
 
 --- Attempt to contact the marimo server to confirm it is alive.
---- Uses GET /api/version — unauthenticated, always 200 when the server is up.
+--- Uses GET /api/version with an optional `access_token` for auth
 --- @param host string
 --- @param port integer
---- @param token string
+--- @param access_token string|nil
 --- @return boolean ok
 --- @return string|nil err
-local function ping(host, port, token)
-	local url = string.format("http://%s:%d/api/version?access_token=%s", host, port, token)
+local function ping(host, port, access_token)
+	local url = string.format("http://%s:%d/api/version?access_token=%s", host, port, access_token)
 	local ok
 	if vim.system then
 		local out = vim.system({ "curl", "-sf", "--max-time", "2", url }):wait()
@@ -357,7 +357,7 @@ end
 --- @param port integer
 --- @param file_path string|nil  Optional: include ?file= for the notebook page
 --- @param access_token string|nil  Optional: include ?access_token= for auth-protected servers
---- @return string  token (may be empty string)
+--- @return string server_token (may be empty string)
 local function fetch_server_token(host, port, file_path, access_token)
 	local url = string.format("http://%s:%d/", host, port)
 	local params = {}
@@ -385,8 +385,8 @@ local function fetch_server_token(host, port, file_path, access_token)
 		html = handle:read("*a") or ""
 		handle:close()
 	end
-	local token = html:match('data%-token="([^"]+)"')
-	return token or ""
+	local server_token = html:match('data%-token="([^"]+)"')
+	return server_token or ""
 end
 
 --- Connect to an already-running marimo server and return a connection descriptor.
