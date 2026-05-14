@@ -19,6 +19,8 @@ local DEFAULT_OPTS = {
 	marimo_project = nil,
 	-- Marimo server token. Optional; set this if your server is configured to require a token.
 	server_token = nil,
+	-- Access token for auth-protected marimo servers (used in URL query params).
+	access_token = nil,
 	-- Whether to open the browser automatically when starting the marimo server.
 	open_browser = true,
 	-- Automatically run markdown-targeted cells once after attach/start.

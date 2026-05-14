@@ -219,13 +219,20 @@ local function browser_host(host)
 end
 
 --- Attempt to contact the marimo server to confirm it is alive.
---- Uses GET /api/version — unauthenticated, always 200 when the server is up.
+--- Uses GET /api/version with an optional `access_token` for auth
 --- @param host string
 --- @param port integer
+--- @param access_token string|nil
 --- @return boolean ok
 --- @return string|nil err
-local function ping(host, port)
-	local url = string.format("http://%s:%d/api/version", host, port)
+local function ping(host, port, access_token)
+	local url
+	if access_token ~= nil and access_token ~= "" then
+		access_token = util.uri_encode(access_token)
+		url = string.format("http://%s:%d/api/version?access_token=%s", host, port, access_token)
+	else
+		url = string.format("http://%s:%d/api/version", host, port)
+	end
 	local ok
 	if vim.system then
 		local out = vim.system({ "curl", "-sf", "--max-time", "2", url }):wait()
@@ -356,7 +363,7 @@ end
 --- @param port integer
 --- @param file_path string|nil  Optional: include ?file= for the notebook page
 --- @param access_token string|nil  Optional: include ?access_token= for auth-protected servers
---- @return string  token (may be empty string)
+--- @return string server_token (may be empty string)
 local function fetch_server_token(host, port, file_path, access_token)
 	local url = string.format("http://%s:%d/", host, port)
 	local params = {}
@@ -384,8 +391,8 @@ local function fetch_server_token(host, port, file_path, access_token)
 		html = handle:read("*a") or ""
 		handle:close()
 	end
-	local token = html:match('data%-token="([^"]+)"')
-	return token or ""
+	local server_token = html:match('data%-token="([^"]+)"')
+	return server_token or ""
 end
 
 --- Connect to an already-running marimo server and return a connection descriptor.
@@ -395,15 +402,16 @@ end
 function M.connect(notebook_path)
 	local host = config.opts.host or "127.0.0.1"
 	local port = resolve_port()
-
-	local ok, err = ping(host, port)
+	local access_token = config.opts.access_token
+	local server_token = config.opts.server_token or ""
+	local ok, err = ping(host, port, access_token)
 	if not ok then
 		return nil, err
 	end
-
-	local server_token = config.opts.server_token or fetch_server_token(host, port, notebook_path)
-
-	return { host = host, port = port, token = "", server_token = server_token }, nil
+	if server_token == "" then
+		server_token = fetch_server_token(host, port, notebook_path, access_token)
+	end
+	return { host = host, port = port, token = access_token or "", server_token = server_token }, nil
 end
 
 --- Build the browser URL for a notebook in kiosk mode.
@@ -460,7 +468,7 @@ end
 function M.is_running()
 	local host = config.opts.host or "127.0.0.1"
 	local port = resolve_port()
-	local ok, _ = ping(host, port)
+	local ok, _ = ping(host, port, nil)
 	return ok
 end
 
@@ -592,7 +600,7 @@ function M.start(file_path, callback)
 			end
 			return
 		end
-		local ok, _ = ping(host, port)
+		local ok, _ = ping(host, port, token)
 		if ok then
 			local server_token = fetch_server_token(host, port, file_path, token)
 			finish({ host = host, port = port, token = token, server_token = server_token }, nil)
